@@ -13,7 +13,7 @@ st.markdown(
     """
     <style>
     .block-container {
-        padding-top: 0.7rem;
+        padding-top: 1rem;
         padding-bottom: 0.7rem;
         max-width: 1500px;
     }
@@ -29,8 +29,6 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
-
-st.title("Mini Urban & Resilience Digital Twin")
 
 # ============================================================
 # 1. Virtual city
@@ -1357,6 +1355,13 @@ with st.sidebar:
                 "病院/避難所等の優先物資需要増加を想定。"
             )
 
+
+if mode == "平常時":
+    st.title("Mini Urban Digital Twin")
+else:
+    st.title("Mini Resilience Digital Twin")
+
+
 # ============================================================
 # 8. Feasibility / cost
 # ============================================================
@@ -1476,7 +1481,7 @@ with col_main:
     if layer == "⚡ 電力":
 
         st.markdown(
-            f"### {'平常時' if mode == '平常時' else '災害時'}："
+            f"### {'' if mode == '平常時' else '災害時：'}"
             "電力供給レイヤー"
         )
 
@@ -1700,7 +1705,7 @@ with col_main:
 
         fig.update_layout(
             template="plotly_white",
-            height=500,
+            height=400,
             xaxis=dict(
                 visible=False,
                 range=[-1.2, 6.8],
@@ -1737,9 +1742,8 @@ with col_main:
             st.rerun()
 
         st.caption(
-            "地区ノードをクリックすると、下の詳細がすぐ切り替わります。 "
-            "電力レイヤー：青線＝配電系統（太いほど選択時刻の上流供給が大きい）／ "
-            "赤破線＝災害時の配電線断線。地域電源・物流設備は常時表示。"
+            "地区ノードをクリックして下の詳細を切り替え "
+            "電力レイヤー：青線＝配電系統（太いほど選択時刻の上流供給が大きい）"
         )
 
         # Time slider intentionally placed below the network map.
@@ -1859,7 +1863,7 @@ with col_main:
     else:
 
         st.markdown(
-            f"### {'平常時' if mode == '平常時' else '災害時'}："
+            f"### {'' if mode == '平常時' else '災害時：'}"
             "物流・道路レイヤー"
         )
 
@@ -2153,7 +2157,7 @@ with col_main:
 
         fig.update_layout(
             template="plotly_white",
-            height=500,
+            height=400,
             xaxis=dict(
                 visible=False,
                 range=[-1.2, 6.8],
@@ -2190,9 +2194,9 @@ with col_main:
             st.rerun()
 
         st.caption(
-            "地区ノードをクリックすると、下の物流サービス詳細がすぐ切り替わります。 "
+            "地区ノードをクリックして物流サービス詳細を切り替え "
             "物流レイヤー：グレー＝道路 ／ 濃青＝都市外・拠点間の幹線輸送 ／ "
-            "緑＝実際に1日で配送可能なラストワンマイル ／ 赤破線＝通行不能。"
+            "緑＝1日で配送可能なラストワンマイル"
             f" 各地域物流拠点の1日配送距離上限は "
             f"{LOGISTICS_DAILY_DISTANCE_CAPACITY:.0f} distance-unit。"
         )
@@ -2209,13 +2213,13 @@ with col_main:
 
         if a["served"]:
             st.success(
-                f"{selected_district}地区は地域物流拠点 {a['hub']} が担当。"
+                f"{selected_district}地区は地域物流拠点 {a['hub']} が担当 "
                 f" 片道ネットワーク距離 {a['distance']:.2f}、"
                 f"1日の配送負担 {a['route_burden']:.2f}。"
             )
         else:
             st.error(
-                f"{selected_district}地区は1日配送制約の中では未配送です。"
+                f"{selected_district}地区は1日配送制約の中では配送不能 "
                 f" 理由：{a['reason']}"
             )
 
@@ -2257,6 +2261,26 @@ with col_main:
 # 11. KPI panel
 # ============================================================
 
+def compact_metric(label, value, unit="."):
+    st.markdown(
+        f"""
+        <div style="margin-bottom:10px;">
+            <div style="font-size:13px; color:#555;">
+                {label}
+            </div>
+            <div style="line-height:1.1;">
+                <span style="font-size:28px; font-weight:600;">
+                    {value}
+                </span>
+                <span style="font-size:12px; color:#666;">
+                    {unit}
+                </span>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
 with col_kpi:
 
     st.markdown("### 予算・制約")
@@ -2266,15 +2290,23 @@ with col_kpi:
         f"{total_cost} / {TOTAL_BUDGET} pt"
     )
 
-    st.metric(
-        "エネルギー拠点",
-        f"{energy_hub_count} / 3"
+    st.progress(
+        min(total_cost / TOTAL_BUDGET, 1.0)
     )
 
-    st.metric(
-        "物流拠点",
-        f"{len(logistics_hubs)} / 2"
-    )
+    c1, c2 = st.columns(2)
+
+    with c1:
+        st.metric(
+            "エネルギー拠点",
+            f"{energy_hub_count} / 3"
+        )
+
+    with c2:
+        st.metric(
+            "物流拠点",
+            f"{len(logistics_hubs)} / 2"
+        )
 
     if not feasible:
         msgs = []
@@ -2287,79 +2319,91 @@ with col_kpi:
     st.divider()
 
     if mode == "平常時":
-        st.markdown("### 平常時の評価")
+        st.markdown("### 評価")
 
-        st.metric(
-            "CO₂削減量",
-            f"{normal_energy['co2_reduction']:.0f} kg/day",
-        )
-        st.caption(
-            f"地域電源由来CO₂：{normal_energy['local_co2']:.0f} kg/day"
-        )
+        c1, c2 = st.columns(2)
+        with c1:
+            compact_metric(
+                "CO₂削減量",
+                f"{normal_energy['co2_reduction']:.0f}","kg/day",
+            )
+        with c2:
+            compact_metric(
+                "配送可能物資率",
+                f"{normal_logistics['coverage_pct']:.0f}","%",
+            )
 
-        st.metric(
-            "系統購入削減量",
-            f"{normal_energy['grid_reduction']:.0f} kWh/day",
-        )
-
-        st.metric(
-            "地域低炭素電源供給率",
-            f"{normal_energy['local_supply_ratio']:.0f} %",
-        )
-
-        st.metric(
-            "1日配送可能物資率",
-            f"{normal_logistics['coverage_pct']:.0f} %",
-        )
+        c3, c4 = st.columns(2)
+        with c3:
+            compact_metric(
+                "系統購入削減量",
+                f"{normal_energy['grid_reduction']:.0f}","kWh/day",
+            )
 
         avg_lm = normal_logistics["avg_delivery_distance"]
-        st.metric(
-            "平均ラストワンマイル距離",
-            f"{avg_lm:.2f}" if np.isfinite(avg_lm) else "—",
-        )
+        with c4:
+            compact_metric(
+                "平均Last-mile",
+                f"{avg_lm:.2f}" if np.isfinite(avg_lm) else "—", 
+            )
+            
+        c5, c6 = st.columns(2)
+        with c5:
+            compact_metric(
+                "低炭素電源供給率",
+                f"{normal_energy['local_supply_ratio']:.0f}","%",
+            )
+        with c6:
+            compact_metric(
+                "幹線輸送距離",
+                f"{normal_logistics['trunk_distance']:.2f}",
+            )
 
-        st.metric(
-            "幹線・拠点間輸送距離",
-            f"{normal_logistics['trunk_distance']:.2f}",
-        )
-
-        st.caption(
-            "平常時：全地区は系統電力と都市外物流でサービス可能。"
-            "地域拠点は低炭素化・効率化のための追加施策です。"
-        )
+        #st.caption(
+        #    "平常時：全地区は系統電力と都市外物流でサービス可能。"
+        #    "地域拠点は低炭素化・効率化のための追加施策です。"
+        #)
 
     else:
         st.markdown("### 災害時の評価")
 
-        st.metric(
-            "重要施設電力維持率",
-            f"{disaster_energy['critical_supply_pct']:.0f} %",
-        )
+        c1, c2 = st.columns(2)
+        with c1:
+            compact_metric(
+                "重要施設電力維持率",
+                f"{disaster_energy['critical_supply_pct']:.0f}","%",
+            )
 
-        st.metric(
-            "停電地区最低負荷供給率",
-            f"{disaster_energy['blackout_service_pct']:.0f} %",
-        )
+        with c2:
+            compact_metric(
+                "停電地区最低負荷供給率",
+                f"{disaster_energy['blackout_service_pct']:.0f}","%",
+            )
 
-        st.metric(
-            "優先物資到達率",
-            f"{disaster_logistics['goods_delivery_pct']:.0f} %",
-        )
+        c3, c4 = st.columns(2)
+        with c3:
+            compact_metric(
+                "優先物資到達率",
+                f"{disaster_logistics['goods_delivery_pct']:.0f}","%",
+            )
 
-        st.metric(
-            "孤立地区数",
-            f"{disaster_logistics['isolated_count']} 地区",
-        )
+        with c4:
+            compact_metric(
+                "孤立地区数",
+                f"{disaster_logistics['isolated_count']}","地区",
+            )
 
-        st.metric(
-            "最低サービス維持率",
-            f"{minimum_service:.0f} %",
-        )
-
-        st.metric(
-            "重要施設 自立継続時間",
-            f"{disaster_energy['autonomy_hours']:.1f} h",
-        )
+        c5, c6 = st.columns(2)
+        with c5:
+            compact_metric(
+                "最低サービス維持率",
+                f"{minimum_service:.0f}","%",
+            )
+        with c6:
+            compact_metric(
+                "重要施設 自立継続時間",
+                f"{disaster_energy['autonomy_hours']:.1f}","h",
+            )
 
         st.caption(
             "災害時：CO₂や平常時配送効率より、"
