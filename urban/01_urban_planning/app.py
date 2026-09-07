@@ -1466,7 +1466,7 @@ with col_main:
 
     layer = st.radio(
         "表示レイヤー",
-        ["🚚 物流", "⚡ 電力"],
+        ["🏙️ 都市", "🚚 物流", "⚡ 電力"],
         horizontal=True,
         key="urban_layer",
     )
@@ -1476,9 +1476,322 @@ with col_main:
     scenario = disaster_scenario()
 
     # --------------------------------------------------------
-    # 10a. Electricity layer
+    # 10a. City layer
     # --------------------------------------------------------
-    if layer == "⚡ 電力":
+    if layer == "🏙️ 都市":
+
+        st.markdown(
+            f"### {'' if mode == '平常時' else '災害時：'}都市イメージ"
+        )
+
+        fig = go.Figure()
+
+        district_icons = {
+            "A": "🏠",
+            "B": "🏢",
+            "C": "🏠",
+            "D": "🏛️",
+            "E": "🏥",
+            "F": "🏘️",
+            "G": "⛺",
+            "H": "🏫",
+        }
+
+        # Approximate district polygons.
+        # The existing A-H coordinates are preserved as the representative
+        # positions of each district, while the city layer shows areas rather
+        # than graph nodes.
+        district_polygons = {
+            "A": [(0.15, 2.35), (1.75, 2.35), (1.90, 3.65), (0.35, 3.65)],
+            "B": [(1.75, 2.45), (4.15, 2.45), (4.10, 3.75), (1.90, 3.65)],
+            "C": [(4.15, 2.35), (5.95, 2.30), (5.95, 3.70), (4.10, 3.75)],
+            "D": [(0.20, 1.00), (3.00, 1.00), (3.05, 2.45), (1.75, 2.45), (0.15, 2.35)],
+            "E": [(3.00, 0.95), (5.95, 1.00), (5.95, 2.30), (4.15, 2.35), (3.05, 2.45)],
+            "F": [(0.05, -0.45), (2.00, -0.45), (2.20, 1.00), (0.20, 1.00)],
+            "G": [(2.00, -0.45), (4.10, -0.45), (4.20, 0.95), (3.00, 0.95), (2.20, 1.00)],
+            "H": [(4.10, -0.45), (5.95, -0.45), (5.95, 1.00), (4.20, 0.95)],
+        }
+
+        polygon_fill = {
+            "A": "rgba(140, 200, 160, 0.22)",
+            "B": "rgba(120, 160, 210, 0.22)",
+            "C": "rgba(140, 200, 160, 0.22)",
+            "D": "rgba(230, 190, 120, 0.22)",
+            "E": "rgba(220, 130, 130, 0.20)",
+            "F": "rgba(180, 200, 150, 0.22)",
+            "G": "rgba(230, 170, 110, 0.22)",
+            "H": "rgba(150, 180, 220, 0.22)",
+        }
+
+        # District areas
+        first_area = True
+        for d, poly in district_polygons.items():
+            xs = [p[0] for p in poly] + [poly[0][0]]
+            ys = [p[1] for p in poly] + [poly[0][1]]
+
+            p = districts[d]
+            logistics_text = (
+                "地域物流拠点あり"
+                if d in logistics_hubs
+                else "地域物流拠点なし"
+            )
+            energy_text = (
+                TECHNOLOGIES[energy_choice[d]]["label"]
+                if energy_choice[d] != "なし"
+                else "地域エネルギー拠点なし"
+            )
+
+            hovertext = (
+                f"<b>{d}：{p['name']}</b><br>"
+                f"人口：{p['population']}人<br>"
+                f"基礎電力需要：{p['daily_energy']} kWh/day<br>"
+                f"物資需要：{p['goods']} unit/day<br>"
+                f"重要施設：{p['critical'] if p['critical'] else '—'}<br>"
+                f"{logistics_text}<br>"
+                f"{energy_text}"
+            )
+
+            fig.add_trace(
+                go.Scatter(
+                    x=xs,
+                    y=ys,
+                    mode="lines",
+                    fill="toself",
+                    fillcolor=polygon_fill[d],
+                    line=dict(
+                        width=2,
+                        color="rgba(90,90,90,0.50)",
+                    ),
+                    name="地区領域",
+                    legendgroup="district_area",
+                    showlegend=first_area,
+                    customdata=[d] * len(xs),
+                    text=[hovertext] * len(xs),
+                    hovertemplate="%{text}<extra></extra>",
+                )
+            )
+            first_area = False
+
+        # District labels only: no node markers.
+        label_x = [districts[d]["x"] for d in districts]
+        label_y = [districts[d]["y"] for d in districts]
+        label_text = [
+            f"{district_icons[d]}<br><b>{d}</b><br>"
+            f"{districts[d]['name'].replace('地区', '')}"
+            for d in districts
+        ]
+
+        fig.add_trace(
+            go.Scatter(
+                x=label_x,
+                y=label_y,
+                mode="text",
+                text=label_text,
+                customdata=list(districts.keys()),
+                textfont=dict(
+                    color="black",
+                    size=15,
+                ),
+                name="地区名",
+                showlegend=False,
+                hovertext=[
+                    (
+                        f"<b>{d}：{districts[d]['name']}</b><br>"
+                        f"人口：{districts[d]['population']}人<br>"
+                        f"基礎電力需要：{districts[d]['daily_energy']} kWh/day<br>"
+                        f"物資需要：{districts[d]['goods']} unit/day"
+                    )
+                    for d in districts
+                ],
+                hoverinfo="text",
+            )
+        )
+
+        # Keep installed infrastructure visible over the district areas.
+        tech_symbols = {
+            "PV型": "diamond-open",
+            "風力型": "triangle-up-open",
+            "安定電源型": "hexagon-open",
+        }
+        tech_colors = {
+            "PV型": "#f2b134",
+            "風力型": "#5aa6d1",
+            "安定電源型": "#7a6fb0",
+        }
+
+        # Offset equipment markers slightly so that the district labels remain readable.
+        energy_offsets = {
+            "A": (0.30, 0.25),
+            "B": (0.30, 0.25),
+            "C": (0.30, 0.25),
+            "D": (0.30, 0.25),
+            "E": (0.30, 0.25),
+            "F": (0.30, 0.25),
+            "G": (0.30, 0.25),
+            "H": (0.30, 0.25),
+        }
+
+        for tech in ["PV型", "風力型", "安定電源型"]:
+            hubs = [
+                d for d, t in energy_choice.items()
+                if t == tech
+            ]
+
+            if hubs:
+                fig.add_trace(
+                    go.Scatter(
+                        x=[
+                            districts[d]["x"] + energy_offsets[d][0]
+                            for d in hubs
+                        ],
+                        y=[
+                            districts[d]["y"] + energy_offsets[d][1]
+                            for d in hubs
+                        ],
+                        mode="markers",
+                        name=TECHNOLOGIES[tech]["label"],
+                        marker=dict(
+                            size=28,
+                            symbol=tech_symbols[tech],
+                            color=tech_colors[tech],
+                            line=dict(width=3),
+                        ),
+                        hovertext=[
+                            f"{d}：{TECHNOLOGIES[tech]['label']}"
+                            for d in hubs
+                        ],
+                        hoverinfo="text",
+                    )
+                )
+
+        if logistics_hubs:
+            fig.add_trace(
+                go.Scatter(
+                    x=[
+                        districts[d]["x"] - 0.30
+                        for d in logistics_hubs
+                    ],
+                    y=[
+                        districts[d]["y"] + 0.25
+                        for d in logistics_hubs
+                    ],
+                    mode="markers",
+                    name="地域物流拠点",
+                    marker=dict(
+                        size=28,
+                        symbol="square-open",
+                        color="#2ca02c",
+                        line=dict(width=4),
+                    ),
+                    hovertext=[
+                        f"{d}：地域物流拠点"
+                        for d in logistics_hubs
+                    ],
+                    hoverinfo="text",
+                )
+            )
+
+        # In disaster mode, lightly indicate affected areas without turning
+        # the city layer into a network diagram.
+        if mode == "災害時":
+            affected = scenario["blackout_districts"]
+
+            for d in affected:
+                poly = district_polygons[d]
+                xs = [p[0] for p in poly] + [poly[0][0]]
+                ys = [p[1] for p in poly] + [poly[0][1]]
+
+                fig.add_trace(
+                    go.Scatter(
+                        x=xs,
+                        y=ys,
+                        mode="lines",
+                        fill="toself",
+                        fillcolor="rgba(214,39,40,0.06)",
+                        line=dict(
+                            width=3,
+                            dash="dash",
+                            color="rgba(214,39,40,0.65)",
+                        ),
+                        name="災害影響地区",
+                        legendgroup="affected_area",
+                        showlegend=(d == sorted(affected)[0]),
+                        hovertemplate=(
+                            f"{d}：災害時に電力系統の影響あり"
+                            "<extra></extra>"
+                        ),
+                    )
+                )
+
+        fig.update_layout(
+            template="plotly_white",
+            height=400,
+            xaxis=dict(
+                visible=False,
+                range=[-0.15, 6.15],
+                fixedrange=True,
+            ),
+            yaxis=dict(
+                visible=False,
+                range=[-0.55, 3.85],
+                scaleanchor="x",
+                scaleratio=1,
+                fixedrange=True,
+            ),
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="center",
+                x=0.5,
+            ),
+            clickmode="event+select",
+            margin=dict(l=10, r=10, t=35, b=10),
+        )
+
+        city_event = st.plotly_chart(
+            fig,
+            use_container_width=True,
+            config={"displayModeBar": False},
+            on_select="rerun",
+            selection_mode="points",
+            key="city_overview_map",
+        )
+
+        if update_selected_district_from_plot_event(city_event):
+            st.rerun()
+
+        st.caption(
+            "都市レイヤー：A〜Hを地区の『領域』として表示 "
+            " 地区名にマウスを重ねると概要確認化 "
+            " 物流・電力のネットワーク構造は各レイヤーで確認"
+        )
+
+        selected_district = st.session_state["selected_district"]
+        p = districts[selected_district]
+
+        st.markdown(
+            f"#### 選択中：{selected_district}：{p['name']}"
+        )
+
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.metric("人口", f"{p['population']} 人")
+        with c2:
+            st.metric(
+                "基礎電力需要",
+                f"{p['daily_energy']} kWh/day",
+            )
+        with c3:
+            st.metric(
+                "物資需要",
+                f"{p['goods']} unit/day",
+            )
+
+    # --------------------------------------------------------
+    # 10b. Electricity layer
+    # --------------------------------------------------------
+    elif layer == "⚡ 電力":
 
         st.markdown(
             f"### {'' if mode == '平常時' else '災害時：'}"
@@ -1634,6 +1947,7 @@ with col_main:
                 ),
                 hovertext=hovertexts,
                 hoverinfo="text",
+                textfont=dict(color="black",size=14,),
             )
         )
 
@@ -1858,9 +2172,9 @@ with col_main:
         )
 
     # --------------------------------------------------------
-    # 10b. Logistics layer
+    # 10c. Logistics layer
     # --------------------------------------------------------
-    else:
+    elif layer == "🚚 物流":
 
         st.markdown(
             f"### {'' if mode == '平常時' else '災害時：'}"
@@ -2016,6 +2330,7 @@ with col_main:
                 ),
                 hovertext=hovertexts,
                 hoverinfo="text",
+                textfont=dict(color="black",size=14,),
             )
         )
 
