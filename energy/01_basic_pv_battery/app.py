@@ -306,7 +306,7 @@ c1, c2, c3, c4 = st.columns(4)
 c1.metric("購入電力量", f"{grid.sum():.1f} kWh")
 c2.metric("CO₂排出量", f"{co2:.1f} kg")
 c3.metric("PV自給率", f"{pv_supply_ratio:.1f} %")
-c4.metric("PV自家消費率", f"{self_ratio:.1f} %")
+c4.metric("PV自家消費率", f"{pv_self_consumption_ratio:.1f} %")
 
 with st.expander("電力量の内訳詳細を見る"):
     d1, d2, d3, d4, d5 = st.columns(5)
