@@ -15,8 +15,13 @@ st.markdown(
         padding-bottom: 0.7rem;
         max-width: 1450px;
     }
-    [data-testid="stVerticalBlock"] { gap: 0.45rem; }
-    h1 { font-size: 1.8rem !important; }
+    [data-testid="stVerticalBlock"] { gap: 0.2rem; }
+    h1 { font-size: 1.35rem !important; padding: 0 !important; }
+    [data-testid="stMetricValue"] { font-size: 1.6rem; }
+    .st-key-slotbar [data-testid="stHorizontalBlock"] { gap: 2px !important; flex-wrap: nowrap !important; }
+    .st-key-slotbar [data-testid="stColumn"] { min-width: 0 !important; flex: 1 1 0 !important; }
+    .st-key-slotbar button { min-width: 0 !important; border-radius: 3px; }
+    .st-key-slotbar [data-testid="stColumn"]:nth-child(25) { border-left: 2px solid #555; padding-left: 3px; }
     [data-testid="stButton"] button { padding: 0.35rem 0.25rem; }
     div[class*="st-key-slot_"] button { min-height: 1.65rem; height: 1.65rem; padding: 0 0.1rem; }
     div[class*="st-key-slot_"] button p { font-size: 0.78rem; }
@@ -504,7 +509,7 @@ def profile_figure(mode, metric):
     if mode == "updated":
         fig.add_vrect(x0=0, x1=7, fillcolor="#adb5bd", opacity=0.15, line_width=0)
         fig.add_vline(x=7, line_dash="dash", line_width=1)
-    fig.update_layout(height=200, template="plotly_white", margin=dict(t=25,b=20,l=35,r=15),
+    fig.update_layout(height=150, template="plotly_white", margin=dict(t=25,b=20,l=35,r=15),
                       legend=dict(orientation="h", y=1.18), yaxis_title=unit)
     ticks=list(range(0,33,4))
     fig.update_xaxes(range=[0,32],tickvals=ticks,
@@ -514,16 +519,15 @@ def profile_figure(mode, metric):
 
 def render_editor(field, fixed_before=0):
     selected=set(st.session_state[field])
-    for start, count, label in [(0,8,"当日 0〜8時"),(8,8,"当日 8〜16時"),(16,8,"当日 16〜24時"),(24,8,"翌日 0〜8時")]:
-        st.caption(label)
-        columns=st.columns(8, gap="small")
-        for offset,column in enumerate(columns[:count]):
-            h=start+offset
+    st.markdown('<div style="display:flex;font-size:12px;color:#666;line-height:20px;min-height:24px"><span style="width:75%">当日 0〜24時</span><span>翌日 0〜8時</span></div>', unsafe_allow_html=True)
+    with st.container(key="slotbar"):
+        columns=st.columns(32, gap="small")
+        for h,column in enumerate(columns):
             available=bool(df.loc[df["hour"]==h,"available_plan"].iloc[0])
             fixed=h<fixed_before
             status=("充電済" if h in selected else "固定") if fixed else ("外出" if not available else ("充電" if h in selected else "未選択"))
             with column:
-                st.button(f"{h%24:02d}時", help=f"{h%24:02d}:00〜{h%24+1:02d}:00 · {status}",
+                st.button(f"{h%24:02d}", help=f"{'翌日' if h>=24 else '当日'} {h%24:02d}:00〜{h%24+1:02d}:00 · {status}",
                           key=f"slot_{field}_{h}", disabled=fixed or not available,
                           type="primary" if h in selected else "secondary",
                           on_click=toggle_hour,args=(h,field),use_container_width=True)
@@ -536,7 +540,7 @@ def render_soc(schedule, soc):
     fig.add_hline(y=required_soc,line_dash="dot",secondary_y=True)
     fig.update_yaxes(range=[0,CHARGER_POWER*1.25],title_text="kW",secondary_y=False)
     fig.update_yaxes(range=[0,100],title_text="SOC [%]",secondary_y=True)
-    fig.update_layout(height=220,template="plotly_white",margin=dict(t=30,b=30,l=35,r=35),legend=dict(orientation="h",y=1.2))
+    fig.update_layout(height=175,template="plotly_white",margin=dict(t=30,b=30,l=35,r=35),legend=dict(orientation="h",y=1.2))
     ticks=list(range(0,33,4));fig.update_xaxes(tickvals=ticks,ticktext=[f"{'翌' if h>=24 else ''}{h%24:02d}:00" for h in ticks])
     st.plotly_chart(fig,use_container_width=True)
 
@@ -577,20 +581,16 @@ if step in (1,2):
         st.caption("前日の予測をもとに、当日0時〜翌朝8時の充電時間を選択。")
     metric=st.radio("予測情報",["電力需要・PV","CO₂原単位","電気料金"],horizontal=True)
     st.plotly_chart(profile_figure(mode,metric),use_container_width=True)
-    st.markdown("#### 充電する時間")
-    st.caption("開始時刻を選択（1枠＝1時間）。色付き：充電 ／ グレー：外出中・経過済み。")
+    st.caption("充電する開始時刻を選択（1枠＝1時間）　色付き：充電 ／ グレー：外出中・経過済み")
     render_editor(field,7 if step==2 else 0)
     schedule,soc,operation,result=calculate(st.session_state[field],mode)
+    render_soc(schedule,soc)
+    status=feasibility_label(result,operation,required_soc)
+    st.caption(f"選択：{len(st.session_state[field])}時間分 ／ 総充電量：{result['charge_kwh']:.1f} kWh ／ 制約：{status} ／ 点線：必要SOC")
     cols=st.columns(4)
     for col,label,value in zip(cols,["翌朝の出発時SOC","CO₂排出量（予測）","充電コスト（予測）","PVからの充電（予測）"],
                                [f"{result['final_soc']:.1f}%",f"{result['co2_kg']:.2f} kg",f"{result['cost_yen']:.0f} 円",f"{result['pv_to_ev_kwh']:.1f} kWh"]):
         col.metric(label,value)
-    status=feasibility_label(result,operation,required_soc)
-    # Plain text avoids the default emoji status icons.
-    st.markdown(f"**制約の確認：{status}**")
-    st.markdown("#### 充電計画とSOCの推移")
-    st.caption(f"選択した時間枠：{len(st.session_state[field])}時間分 ／ 総充電量：{result['charge_kwh']:.1f} kWh ／ 点線：翌朝の必要SOC")
-    render_soc(schedule,soc)
     if step==2:
         base_schedule,base_soc,base_op,base_result=calculate(st.session_state['original_hours'],'updated')
         with st.expander("同じ更新予測で元の計画と比較",expanded=False):
