@@ -11,12 +11,13 @@ st.markdown(
     <style>
     /* Keep the teaching dashboard visible without unnecessary scrolling. */
     .block-container {
-        padding-top: 1.0rem;
+        padding-top: 3.5rem;
         padding-bottom: 0.7rem;
         max-width: 1450px;
     }
     [data-testid="stVerticalBlock"] { gap: 0.2rem; }
-    h1 { font-size: 1.35rem !important; padding: 0 !important; }
+    h1 { font-size: 1.35rem !important; padding: 0 !important; line-height: 1.5 !important; }
+    .st-key-titlebar { min-height: 38px; }
     [data-testid="stMetricValue"] { font-size: 1.6rem; }
     .st-key-slotbar [data-testid="stHorizontalBlock"] { gap: 2px !important; flex-wrap: nowrap !important; }
     .st-key-slotbar [data-testid="stColumn"] { min-width: 0 !important; flex: 1 1 0 !important; }
@@ -49,7 +50,7 @@ st.markdown(
     """
 <style>
 .block-container {
-    padding-top: 1rem;
+    padding-top: 3.5rem;
     padding-bottom: 1rem;
     padding-left: 2rem;
     padding-right: 2rem;
@@ -61,7 +62,8 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-st.title("Mini EV Energy Digital Twin")
+with st.container(key="titlebar"):
+    st.title("Mini EV Energy Digital Twin")
 #st.caption("いつ充電する？ → 予測で比べる → 実際はどうなった？ → 必要なら計画を更新する")
 
 # ============================================================
@@ -96,7 +98,7 @@ DAY_TYPES = {
     },
 }
 
-
+DAY_TYPES = {key: DAY_TYPES[key] for key in ("平日", "休日")}
 
 def hour_label(h):
     if h < 24:
@@ -144,8 +146,7 @@ def generate_profiles(day_type):
     daylight = np.maximum(0.0, np.sin((hod - 6.0) / 12.0 * np.pi))
     pv_fc = 5.2 * daylight
 
-    # Grid carbon intensity (deterministic in this teaching example).
-    # Uncertainty is intentionally limited to PV generation only.
+    # Original grid carbon-intensity forecast.
     if day_type == "平日":
         # Weekday example:
         # - relatively low CI from 00:00 to around 05:00
@@ -176,7 +177,12 @@ def generate_profiles(day_type):
     # Keep demand / CI close to forecast so students can focus on the PV forecast error.
     rng = np.random.default_rng(2026)
     load_act = load_fc * (1 + rng.normal(0, 0.04, len(hours)))  # small demand forecast error
-    ci_act = ci_fc.copy()  # CI is treated as known/deterministic in this demo
+    # At 07:00, revise evening and next-morning grid mix expectations.
+    ci_shift = np.where(hours >= 7,
+        0.025 * np.exp(-0.5 * ((hours - 19) / 2.5) ** 2)
+        - 0.035 * np.exp(-0.5 * ((hours - 27) / 2.5) ** 2), 0.0)
+    ci_upd = ci_fc + ci_shift
+    ci_act = ci_fc + 1.15 * ci_shift
     price_act = price_fc.copy()  # electricity price is known and fixed in this demo
 
     # 07:00 updated PV forecast:
@@ -214,7 +220,7 @@ def generate_profiles(day_type):
         }
     )
     df["load_upd"] = df["load_fc"]  # demand forecast is not updated in this simple example
-    df["ci_upd"] = df["ci_fc"]  # CI forecast does not change
+    df["ci_upd"] = np.clip(ci_upd, 0.15, 0.8)
     df["price_upd"] = df["price_fc"]
 
     df["available_plan"] = availability_mask(hours, cfg["availability_windows"])
@@ -502,6 +508,10 @@ def profile_figure(mode, metric):
         unit = "kW"
     else:
         cols = [("ci_fc" if metric == "CO₂原単位" else "price_fc", metric, "#3277b3", "solid")]
+        if metric == "CO₂原単位":
+            cols[0] = ("ci_fc", "前日のCO₂原単位予測", "#3277b3", "solid")
+            if mode == "updated":
+                cols.append(("ci_upd", "朝7時のCO₂原単位予測", "#269460", "dash"))
         unit = "kg-CO₂/kWh" if metric == "CO₂原単位" else "円/kWh"
     for column, label, color, dash in cols:
         fig.add_trace(go.Scatter(x=df["hour"], y=df[column], name=label,
@@ -519,7 +529,7 @@ def profile_figure(mode, metric):
 
 def render_editor(field, fixed_before=0):
     selected=set(st.session_state[field])
-    st.markdown('<div style="display:flex;font-size:12px;color:#666;line-height:20px;min-height:24px"><span style="width:75%">当日 0〜24時</span><span>翌日 0〜8時</span></div>', unsafe_allow_html=True)
+    st.markdown('<div style="display:flex;font-size:12px;color:#666;line-height:20px;min-height:32px"><span style="width:75%">当日 0〜24時</span><span>翌日 0〜8時</span></div>', unsafe_allow_html=True)
     with st.container(key="slotbar"):
         columns=st.columns(32, gap="small")
         for h,column in enumerate(columns):
@@ -561,7 +571,7 @@ with st.sidebar:
     st.write("容量：40 kWh ／ 充電電力：3 kW")
     st.caption("1時間枠ごとに充電。効率95%。満充電時には停止。")
     st.caption(f"外出中のSOC消費：1時間あたり{cfg['away_soc_per_hour']:g}ポイント")
-    st.caption("CO₂原単位・料金は既知。CO₂・料金の評価対象はEV充電に伴う系統購入分。")
+    st.caption("CO₂原単位は予測・更新の対象。料金は固定。CO₂・料金の評価対象はEV充電に伴う系統購入分。")
     st.button("最初から計画を作り直す",on_click=reset_exercise,use_container_width=True)
 
 df,_,_=generate_profiles(day_type)
@@ -576,7 +586,7 @@ if step in (1,2):
     if step==2:
         # Always preserve the original executed past, even across navigation.
         st.session_state[field]=sorted([h for h in st.session_state['original_hours'] if h<7]+[h for h in st.session_state[field] if h>=7])
-        st.caption("朝7時の更新予測：9〜12時は曇り。0〜7時の実行結果を固定し、7時以降を見直し。")
+        st.caption("朝7時：午前のPV予測とCO₂原単位の予測を更新。0〜7時は固定し、以降を見直し。")
     else:
         st.caption("前日の予測をもとに、当日0時〜翌朝8時の充電時間を選択。")
     metric=st.radio("予測情報",["電力需要・PV","CO₂原単位","電気料金"],horizontal=True)
@@ -592,32 +602,38 @@ if step in (1,2):
                                [f"{result['final_soc']:.1f}%",f"{result['co2_kg']:.2f} kg",f"{result['cost_yen']:.0f} 円",f"{result['pv_to_ev_kwh']:.1f} kWh"]):
         col.metric(label,value)
     if step==2:
-        base_schedule,base_soc,base_op,base_result=calculate(st.session_state['original_hours'],'updated')
-        with st.expander("同じ更新予測で元の計画と比較",expanded=False):
-            st.dataframe(comparison_table(base_result,result,"元の計画","見直し案",base_op,operation,required_soc,"差（見直し案−元）"),hide_index=True,use_container_width=True)
-        c1,c2,c3=st.columns(3)
-        c1.button("元の計画の編集に戻る",on_click=go_to,args=(1,),use_container_width=True)
-        c2.button("変更せず結果へ進む",on_click=keep_original,use_container_width=True)
-        c3.button("見直した計画で結果へ進む",on_click=go_to,args=(3,),disabled=status!="充足",type="primary",use_container_width=True)
+        st.button("この計画で結果へ進む",on_click=go_to,args=(3,),disabled=status!="充足",type="primary",use_container_width=True)
     else:
         st.button("この計画を確定して朝7時へ進む",on_click=confirm_original,disabled=status!="充足",type="primary",use_container_width=True)
 else:
     original_schedule,original_soc,original_op,original_result=calculate(st.session_state['original_hours'],'actual')
     revised_schedule,revised_soc,revised_op,revised_result=calculate(st.session_state['revised_hours'],'actual')
-    st.caption("実績：9〜12時は曇り、12時以降は晴れ。両案に同じ天候・家庭需要・料金・CO₂原単位・EV利用予定を適用。")
-    st.dataframe(comparison_table(original_result,revised_result,"元の計画を継続","更新後の計画",original_op,revised_op,required_soc,"差（更新後−元）"),hide_index=True,use_container_width=True)
-    if np.allclose(original_schedule,revised_schedule):
-        st.caption("両案の充電計画は同一。計画変更による差はなし。")
-    st.caption("灰色部分：朝7時以前の固定済みの実行結果。SOCの差はポイント表示。制約：走行中の電欠なし・翌朝SOC80%以上。")
+    _,_,_,original_estimate=calculate(st.session_state['original_hours'],'forecast')
+    _,_,_,updated_estimate=calculate(st.session_state['revised_hours'],'updated')
+    st.caption("両計画を同じ実績条件で比較。灰色：朝7時以前の固定済みの実行結果。")
     metric=st.radio("実績情報",["エネルギー","CO₂原単位","電気料金"],horizontal=True)
-    st.plotly_chart(make_actual_comparison_figure(df,metric,original_schedule,original_soc,revised_schedule,revised_soc,day_type),use_container_width=True)
-    with st.expander("予測時の評価と実績条件での評価の違い",expanded=False):
-        st.caption("各計画を固定し、予測と実績の違いのみを比較。計画変更の効果とは別の比較。")
-        for title,hours,mode,actual,op in [
-            ('元の計画：前日の予測と実績',st.session_state['original_hours'],'forecast',original_result,original_op),
-            ('更新後の計画：朝7時の予測と実績',st.session_state['revised_hours'],'updated',revised_result,revised_op),
-        ]:
-            _,_,pred_op,pred_result=calculate(hours,mode)
-            st.markdown(f"##### {title}")
-            st.dataframe(comparison_table(pred_result,actual,"予測での評価","実績条件での評価",pred_op,op,required_soc,"差（実績−予測）"),hide_index=True,use_container_width=True)
-    st.button("朝7時の見直しに戻る",on_click=go_to,args=(2,),use_container_width=True)
+    fig=make_subplots(rows=2,cols=1,shared_xaxes=True,vertical_spacing=0.15,
+        specs=[[{}],[{"secondary_y":True}]],subplot_titles=("実績条件", "充電電力とSOC：元の計画・更新後の計画"))
+    series = [("pv_act","PV実績","#e7a21b"),("load_act","家庭需要実績","#546e7a")] if metric=="エネルギー" else [("ci_act" if metric=="CO₂原単位" else "price_act",metric,"#546e7a")]
+    for key,label,color in series:
+        fig.add_trace(go.Scatter(x=df.hour,y=df[key],name=label,line=dict(color=color,width=2)),row=1,col=1)
+    for schedule,soc,label,color in [(original_schedule,original_soc,"元の計画","#3277b3"),(revised_schedule,revised_soc,"更新後","#269460")]:
+        fig.add_trace(go.Bar(x=df.hour[:32]+0.5,y=schedule[:32],name=label+" 充電",marker_color=color),row=2,col=1)
+        fig.add_trace(go.Scatter(x=np.arange(33),y=np.r_[INITIAL_SOC,soc[:32]],name=label+" SOC",line=dict(color=color,dash="dot" if label=="元の計画" else "solid")),row=2,col=1,secondary_y=True)
+    fig.update_yaxes(title_text="kW" if metric=="エネルギー" else ("kg-CO₂/kWh" if metric=="CO₂原単位" else "円/kWh"),row=1,col=1)
+    fig.update_yaxes(title_text="kW",range=[0,3.8],row=2,col=1,secondary_y=False)
+    fig.update_yaxes(title_text="SOC [%]",range=[0,100],showgrid=False,row=2,col=1,secondary_y=True)
+    fig.add_hline(y=required_soc,line_dash="dot",line_width=1,row=2,col=1,secondary_y=True)
+    fig.add_vrect(x0=0,x1=7,fillcolor="#adb5bd",opacity=0.12,line_width=0)
+    ticks=list(range(0,33,4))
+    fig.update_xaxes(range=[0,32],tickvals=ticks,ticktext=[f"{'翌' if h>=24 else ''}{h%24:02d}:00" for h in ticks])
+    fig.update_layout(height=320,template="plotly_white",barmode="group",margin=dict(t=50,b=25,l=40,r=40),legend=dict(orientation="h",y=1.2,font=dict(size=11)))
+    fig.update_annotations(font_size=12)
+    st.plotly_chart(fig,use_container_width=True)
+    st.caption("更新後の計画の実績 ／ 各予測値は、その時点で選択した計画の評価")
+    for col,label,key,fmt,unit in zip(st.columns(4),
+        ["翌朝の出発時SOC","CO₂排出量","充電コスト","PVからの充電"],
+        ["final_soc","co2_kg","cost_yen","pv_to_ev_kwh"],[".1f",".2f",".0f",".1f"],["%"," kg"," 円"," kWh"]):
+        col.metric(label,format(revised_result[key],fmt)+unit)
+        col.caption("前日の予測："+format(original_estimate[key],fmt)+unit+"  \n朝7時の予測："+format(updated_estimate[key],fmt)+unit)
+    st.caption(f"総充電量：{revised_result['charge_kwh']:.1f} kWh ／ 制約：{feasibility_label(revised_result,revised_op,required_soc)}")
