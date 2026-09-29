@@ -599,7 +599,12 @@ for col,i,title in zip(st.columns(3),[1,2,3],["充電計画の作成","予測更
     with col:
         color = "#17365d" if step == i else "#b3bac3"
         weight = "700" if step == i else "400"
-        st.markdown(f'<div style="color:{color};font-weight:{weight};font-size:14px">{i}．{title}</div>', unsafe_allow_html=True)
+        st.markdown(
+            f'<div style="color:{color};font-weight:{weight};'
+            f'font-size:14px;line-height:24px;padding-bottom:8px;">'
+            f'{i}．{title}</div>',
+            unsafe_allow_html=True,
+        )
 
 if step in (1,2):
     mode="forecast" if step==1 else "updated"
