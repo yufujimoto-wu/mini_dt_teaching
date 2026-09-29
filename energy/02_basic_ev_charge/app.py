@@ -175,6 +175,15 @@ def generate_profiles(day_type):
             + 0.06 * np.exp(-0.5 * ((hod - 19.5) / 2.2) ** 2)
         )
 
+    if day_type == "休日2":
+        # Higher daytime grid intensity, smoothly raised between 08:00 and 18:00.
+        daytime_bump = np.where(
+            (hod >= 8) & (hod <= 18),
+            0.18 * np.sin(np.pi * (hod - 8) / 10.0) ** 2,
+            0.0,
+        )
+        ci_fc = ci_fc + daytime_bump
+
     # Electricity price: TEPCO Energy Partner "Yoru-Toku 8"-type time-of-use tariff.
     # Teaching simplification: energy charge only; fuel-cost adjustment etc. are omitted.
     # 07:00–23:00 = 42.60 JPY/kWh, 23:00–07:00 = 31.64 JPY/kWh.
