@@ -18,8 +18,8 @@ st.markdown(
     [data-testid="stVerticalBlock"] { gap: 0.45rem; }
     h1 { font-size: 1.8rem !important; }
     [data-testid="stButton"] button { padding: 0.35rem 0.25rem; }
-    .block-container {
-    }
+    div[class*="st-key-slot_"] button { min-height: 1.65rem; height: 1.65rem; padding: 0 0.1rem; }
+    div[class*="st-key-slot_"] button p { font-size: 0.78rem; }
     div[data-testid="stRadio"] {
         margin-top: -0.35rem;
         margin-bottom: -0.55rem;
@@ -514,16 +514,16 @@ def profile_figure(mode, metric):
 
 def render_editor(field, fixed_before=0):
     selected=set(st.session_state[field])
-    for start in [0,8,16,24]:
-        st.caption("当日" if start==0 else ("翌日" if start==24 else "当日（続き）"))
-        columns=st.columns(8)
-        for offset,column in enumerate(columns):
+    for start, count, label in [(0,8,"当日 0〜8時"),(8,8,"当日 8〜16時"),(16,8,"当日 16〜24時"),(24,8,"翌日 0〜8時")]:
+        st.caption(label)
+        columns=st.columns(8, gap="small")
+        for offset,column in enumerate(columns[:count]):
             h=start+offset
             available=bool(df.loc[df["hour"]==h,"available_plan"].iloc[0])
             fixed=h<fixed_before
             status=("充電済" if h in selected else "固定") if fixed else ("外出" if not available else ("充電" if h in selected else "未選択"))
             with column:
-                st.button(f"{h%24:02d}–{h%24+1:02d}" + (f" {status}" if status != "未選択" else ""),
+                st.button(f"{h%24:02d}時", help=f"{h%24:02d}:00〜{h%24+1:02d}:00 · {status}",
                           key=f"slot_{field}_{h}", disabled=fixed or not available,
                           type="primary" if h in selected else "secondary",
                           on_click=toggle_hour,args=(h,field),use_container_width=True)
@@ -536,7 +536,7 @@ def render_soc(schedule, soc):
     fig.add_hline(y=required_soc,line_dash="dot",secondary_y=True)
     fig.update_yaxes(range=[0,CHARGER_POWER*1.25],title_text="kW",secondary_y=False)
     fig.update_yaxes(range=[0,100],title_text="SOC [%]",secondary_y=True)
-    fig.update_layout(height=280,template="plotly_white",margin=dict(t=30,b=30,l=35,r=35),legend=dict(orientation="h",y=1.2))
+    fig.update_layout(height=220,template="plotly_white",margin=dict(t=30,b=30,l=35,r=35),legend=dict(orientation="h",y=1.2))
     ticks=list(range(0,33,4));fig.update_xaxes(tickvals=ticks,ticktext=[f"{'翌' if h>=24 else ''}{h%24:02d}:00" for h in ticks])
     st.plotly_chart(fig,use_container_width=True)
 
@@ -578,7 +578,7 @@ if step in (1,2):
     metric=st.radio("予測情報",["電力需要・PV","CO₂原単位","電気料金"],horizontal=True)
     st.plotly_chart(profile_figure(mode,metric),use_container_width=True)
     st.markdown("#### 充電する時間")
-    st.caption("色付き：充電を選択 ／ 外出中は選択不可。各ボタンは開始〜終了の1時間枠。")
+    st.caption("開始時刻を選択（1枠＝1時間）。色付き：充電 ／ グレー：外出中・経過済み。")
     render_editor(field,7 if step==2 else 0)
     schedule,soc,operation,result=calculate(st.session_state[field],mode)
     cols=st.columns(4)
@@ -588,9 +588,9 @@ if step in (1,2):
     status=feasibility_label(result,operation,required_soc)
     # Plain text avoids the default emoji status icons.
     st.markdown(f"**制約の確認：{status}**")
-    with st.expander("充電量・SOCの推移を確認",expanded=False):
-        st.write(f"総充電量：{result['charge_kwh']:.1f} kWh")
-        render_soc(schedule,soc)
+    st.markdown("#### 充電計画とSOCの推移")
+    st.caption(f"選択した時間枠：{len(st.session_state[field])}時間分 ／ 総充電量：{result['charge_kwh']:.1f} kWh ／ 点線：翌朝の必要SOC")
+    render_soc(schedule,soc)
     if step==2:
         base_schedule,base_soc,base_op,base_result=calculate(st.session_state['original_hours'],'updated')
         with st.expander("同じ更新予測で元の計画と比較",expanded=False):
@@ -608,19 +608,9 @@ else:
     st.dataframe(comparison_table(original_result,revised_result,"元の計画を継続","更新後の計画",original_op,revised_op,required_soc,"差（更新後−元）"),hide_index=True,use_container_width=True)
     if np.allclose(original_schedule,revised_schedule):
         st.caption("両案の充電計画は同一。計画変更による差はなし。")
-    fig=make_subplots(rows=2,cols=1,shared_xaxes=True,subplot_titles=("元の計画を継続","更新後の計画"),vertical_spacing=0.22)
-    for row,sch,color in [(1,original_schedule,'#3277b3'),(2,revised_schedule,'#269460')]:
-        fig.add_trace(go.Bar(x=df['hour'][:32]+0.5,y=sch[:32],marker_color=color,showlegend=False,width=0.85),row=row,col=1)
-        fig.update_yaxes(range=[0,CHARGER_POWER*1.25],title_text="kW",row=row,col=1)
-        fig.add_vrect(x0=0,x1=7,fillcolor='#adb5bd',opacity=0.15,line_width=0,row=row,col=1)
-        fig.add_vline(x=7,line_dash='dash',line_width=1,row=row,col=1)
-    ticks=list(range(0,33,4));fig.update_xaxes(range=[0,32],tickvals=ticks,ticktext=[f"{'翌' if h>=24 else ''}{h%24:02d}:00" for h in ticks])
-    fig.update_layout(height=310,template='plotly_white',margin=dict(t=30,b=25,l=30,r=20))
-    st.plotly_chart(fig,use_container_width=True)
     st.caption("灰色部分：朝7時以前の固定済みの実行結果。SOCの差はポイント表示。制約：走行中の電欠なし・翌朝SOC80%以上。")
-    with st.expander("実績条件とSOCの推移を詳しく確認",expanded=False):
-        metric=st.radio("実績情報",["エネルギー","CO₂原単位","電気料金"],horizontal=True)
-        st.plotly_chart(make_actual_comparison_figure(df,metric,original_schedule,original_soc,revised_schedule,revised_soc,day_type),use_container_width=True)
+    metric=st.radio("実績情報",["エネルギー","CO₂原単位","電気料金"],horizontal=True)
+    st.plotly_chart(make_actual_comparison_figure(df,metric,original_schedule,original_soc,revised_schedule,revised_soc,day_type),use_container_width=True)
     with st.expander("予測時の評価と実績条件での評価の違い",expanded=False):
         st.caption("各計画を固定し、予測と実績の違いのみを比較。計画変更の効果とは別の比較。")
         for title,hours,mode,actual,op in [
