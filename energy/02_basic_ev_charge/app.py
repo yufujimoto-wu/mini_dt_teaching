@@ -72,33 +72,42 @@ with st.container(key="titlebar"):
 EV_CAPACITY = 40.0          # kWh
 CHARGER_POWER = 3.0         # kW (1-hour time step)
 CHARGE_EFF = 0.95
-TARGET_SOC = 80.0           # %
-INITIAL_SOC = 30.0          # %
+TARGET_SOC = 60.0           # %
+INITIAL_SOC = 60.0          # %
 
 DAY_TYPES = {
-    "休日": {
-        "description": "当日0:00時点でSOC 30%。8–10時は買い物、17–20時は外食。それ以外は自宅にEVがあります。",
+    "休日1": {
+        "description": "当日0:00時点でSOC 60%。8–10時は買い物、17–20時は外食。それ以外は自宅にEVがあります。",
         "start_hour": 0,
         "planned_departure_abs": 32,  # 翌8:00
         "availability_windows": [(0, 8), (10, 17), (20, 32)],
         "summary": ["08:00–10:00 買い物", "17:00–20:00 外食", "翌08:00 次の出発"],
         # SOC consumption while away (%-points per hour)
         "away_soc_per_hour": 4.0,
-        "required_soc": 80.0,
+        "required_soc": 60.0,
     },
     "平日": {
-        "description": "当日0:00時点でSOC 30%。朝8時に出発し、18時に帰宅。翌朝8時まで充電できます。",
+        "description": "当日0:00時点でSOC 60%。朝8時に出発し、18時に帰宅。翌朝8時まで充電できます。",
         "start_hour": 0,
         "planned_departure_abs": 32,  # 翌8:00
         "availability_windows": [(0, 8), (18, 32)],
         "summary": ["08:00-18:00 仕事", "翌08:00 出発"],
         # SOC consumption while away (%-points per hour)
         "away_soc_per_hour": 3,
-        "required_soc": 80.0,
+        "required_soc": 60.0,
     },
 }
 
-DAY_TYPES = {key: DAY_TYPES[key] for key in ("平日", "休日")}
+DAY_TYPES["休日2"] = {
+    "description": "当日0:00時点でSOC 60%。16–18時は買い物。それ以外は自宅。前日は終日曇りの予測、朝7時に昼から晴れる予測へ更新。",
+    "start_hour": 0,
+    "planned_departure_abs": 32,
+    "availability_windows": [(0, 16), (18, 32)],
+    "summary": ["16:00–18:00 買い物", "翌08:00 次の出発"],
+    "away_soc_per_hour": 4.0,
+    "required_soc": 60.0,
+}
+DAY_TYPES = {key: DAY_TYPES[key] for key in ("平日", "休日1", "休日2")}
 
 def hour_label(h):
     if h < 24:
@@ -201,6 +210,16 @@ def generate_profiles(day_type):
     pv_act[afternoon] = pv_fc[afternoon] * (
         1 + rng.normal(0, 0.015, afternoon.sum())
     )
+
+    if day_type == "休日2":
+        # Cloudy original forecast; at 07:00, clearing from noon is expected.
+        clear_pv = pv_fc.copy()
+        pv_fc = clear_pv * 0.25
+        pv_upd = pv_fc.copy()
+        clearing = (hours >= 12) & (hours < 24)
+        pv_upd[clearing] = clear_pv[clearing] * 0.95
+        pv_act = clear_pv * 0.25
+        pv_act[clearing] = clear_pv[clearing] * 0.90
 
     actual_windows = list(cfg["availability_windows"])
     actual_departure_abs = cfg["planned_departure_abs"]
@@ -567,7 +586,7 @@ with st.sidebar:
     for item in cfg["summary"]:
         st.write(item)
     st.markdown("### 充電条件")
-    st.write("初期SOC：30% ／ 翌朝必要SOC：80%以上")
+    st.write(f"初期SOC：{INITIAL_SOC:g}% ／ 翌朝必要SOC：{cfg['required_soc']:g}%以上")
     st.write("容量：40 kWh ／ 充電電力：3 kW")
     st.caption("1時間枠ごとに充電。効率95%。満充電時には停止。")
     st.caption(f"外出中のSOC消費：1時間あたり{cfg['away_soc_per_hour']:g}ポイント")
@@ -578,7 +597,9 @@ df,_,_=generate_profiles(day_type)
 required_soc=cfg["required_soc"]
 for col,i,title in zip(st.columns(3),[1,2,3],["充電計画の作成","予測更新と見直し","実績条件での比較"]):
     with col:
-        st.markdown(f"{'**' if step==i else ''}{i}．{title}{'**' if step==i else ''}")
+        color = "#17365d" if step == i else "#b3bac3"
+        weight = "700" if step == i else "400"
+        st.markdown(f'<div style="color:{color};font-weight:{weight};font-size:14px">{i}．{title}</div>', unsafe_allow_html=True)
 
 if step in (1,2):
     mode="forecast" if step==1 else "updated"
@@ -586,9 +607,11 @@ if step in (1,2):
     if step==2:
         # Always preserve the original executed past, even across navigation.
         st.session_state[field]=sorted([h for h in st.session_state['original_hours'] if h<7]+[h for h in st.session_state[field] if h>=7])
-        st.caption("朝7時：午前のPV予測とCO₂原単位の予測を更新。0〜7時は固定し、以降を見直し。")
+        weather_update = "昼から晴れる予測へ更新" if day_type == "休日2" else "午前のPV予測を下方修正"
+        st.caption(f"朝7時：{weather_update}。CO₂原単位も更新。0〜7時は固定。")
     else:
-        st.caption("前日の予測をもとに、当日0時〜翌朝8時の充電時間を選択。")
+        weather = "終日曇り" if day_type == "休日2" else "晴れ"
+        st.caption(f"前日の予測：{weather}。当日0時〜翌朝8時の充電時間を選択。")
     metric=st.radio("予測情報",["電力需要・PV","CO₂原単位","電気料金"],horizontal=True)
     st.plotly_chart(profile_figure(mode,metric),use_container_width=True)
     st.caption("充電する開始時刻を選択（1枠＝1時間）　色付き：充電 ／ グレー：外出中・経過済み")
