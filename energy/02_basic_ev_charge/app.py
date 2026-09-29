@@ -15,6 +15,11 @@ st.markdown(
         padding-bottom: 0.7rem;
         max-width: 1450px;
     }
+    [data-testid="stVerticalBlock"] { gap: 0.45rem; }
+    h1 { font-size: 1.8rem !important; }
+    [data-testid="stButton"] button { padding: 0.35rem 0.25rem; }
+    .block-container {
+    }
     div[data-testid="stRadio"] {
         margin-top: -0.35rem;
         margin-bottom: -0.55rem;
@@ -64,7 +69,7 @@ TARGET_SOC = 80.0           # %
 INITIAL_SOC = 30.0          # %
 
 DAY_TYPES = {
-    "☀️ 休日": {
+    "休日": {
         "description": "当日0:00時点でSOC 30%。8–10時は買い物、17–20時は外食。それ以外は自宅にEVがあります。",
         "start_hour": 0,
         "planned_departure_abs": 32,  # 翌8:00
@@ -74,7 +79,7 @@ DAY_TYPES = {
         "away_soc_per_hour": 4.0,
         "required_soc": 80.0,
     },
-    "🏢 平日": {
+    "平日": {
         "description": "当日0:00時点でSOC 30%。朝8時に出発し、18時に帰宅。翌朝8時まで充電できます。",
         "start_hour": 0,
         "planned_departure_abs": 32,  # 翌8:00
@@ -86,11 +91,6 @@ DAY_TYPES = {
     },
 }
 
-STRATEGIES = {
-    "⚡ 利用するたびにすぐ充電": "必要SOC未満なら、利用可能な最初の1時間枠から定格で充電します。",
-    "🌙 夜間充電": "23:00–翌7:00の1時間枠を優先し、選んだ枠では定格で充電します。",
-    "🕒 自分で設定": "充電したい1時間枠を自由に選びます。",
-}
 
 
 def hour_label(h):
@@ -141,7 +141,7 @@ def generate_profiles(day_type):
 
     # Grid carbon intensity (deterministic in this teaching example).
     # Uncertainty is intentionally limited to PV generation only.
-    if day_type == "🏢 平日":
+    if day_type == "平日":
         # Weekday example:
         # - relatively low CI from 00:00 to around 05:00
         # - higher through daytime/evening
@@ -228,96 +228,6 @@ def allocate_energy_by_order(df, ordered_indices, energy_kwh):
         remaining -= p
     return schedule
 
-
-def strategy_schedule(
-    df,
-    strategy,
-    day_type,
-    soc0=INITIAL_SOC,
-    availability_col="available_plan",
-    energy_kwh=None,
-    selected_hours=None,
-):
-    """
-    Build the requested charging profile in 1-hour discrete slots.
-
-    Common rule for all strategies:
-      - If a slot is selected for charging, request CHARGER_POWER for the full hour.
-      - No within-slot modulation is used to hit the target SOC exactly.
-      - Physical feasibility (EV availability, SOC <= 100%, etc.) is enforced
-        later by execute_operation().
-    """
-    cfg = DAY_TYPES[day_type]
-    available = df[availability_col].to_numpy(dtype=bool)
-    requested = np.zeros(len(df), dtype=float)
-
-    if strategy == "⚡ 利用するたびにすぐ充電":
-        # Sequential baseline:
-        # whenever the EV is home and SOC is below the required level at the
-        # beginning of the slot, select that whole one-hour slot for charging.
-        soc = float(soc0)
-        required_soc = cfg["required_soc"]
-
-        for i, row in df.iterrows():
-            hour = int(row["hour"])
-            if hour >= cfg["planned_departure_abs"]:
-                break
-
-            if available[i]:
-                if soc < required_soc - 1e-9:
-                    requested[i] = CHARGER_POWER
-                    soc += CHARGER_POWER * CHARGE_EFF / EV_CAPACITY * 100.0
-                    soc = min(100.0, soc)
-            else:
-                soc -= cfg["away_soc_per_hour"]
-                soc = max(0.0, soc)
-
-        return requested
-
-    if strategy == "🌙 夜間充電":
-        # Select whole hourly slots, prioritizing the cheaper 23:00–07:00 window.
-        # Keep selecting full-power slots until the simulated next-morning SOC
-        # reaches or exceeds the required SOC.
-        soc = float(soc0)
-        required_soc = cfg["required_soc"]
-
-        # Candidate slots: night first, then other available slots.
-        available_idx = df.index[available].tolist()
-        night = [
-            i for i in available_idx
-            if (df.loc[i, "hour"] % 24 >= 23) or (df.loc[i, "hour"] % 24 < 7)
-        ]
-        day = [i for i in available_idx if i not in night]
-        ordered_candidates = (
-            sorted(night, key=lambda i: df.loc[i, "hour"])
-            + sorted(day, key=lambda i: df.loc[i, "hour"])
-        )
-
-        # Greedily add full-hour slots and evaluate the resulting SOC trajectory
-        # using the same physical model as the display.
-        for i in ordered_candidates:
-            requested[i] = CHARGER_POWER
-            _, soc_series_tmp, op_tmp = execute_operation(
-                df,
-                requested,
-                day_type,
-                availability_col=availability_col,
-                soc0=soc0,
-            )
-            if op_tmp["driving_feasible"] and soc_series_tmp[-1] >= required_soc - 1e-9:
-                break
-
-        return requested
-
-    # Student-selected hourly slots.
-    if selected_hours:
-        selected_set = set(int(h) for h in selected_hours)
-        for i, row in df.iterrows():
-            hour = int(row["hour"])
-            if hour in selected_set and hour < cfg["planned_departure_abs"]:
-                requested[i] = CHARGER_POWER
-
-    return requested
 
 def apply_actual_availability(df, schedule):
     applied = schedule.copy()
@@ -438,141 +348,6 @@ def infeasible_selected_hours(df, selected_hours, availability_col="available_pl
     return unavailable
 
 
-def make_main_figure(df, metric, schedule, soc_series, day_type, show_actual=False, updated_df=None, update_hour=None, plan_label="EV充電計画"):
-    fig = make_subplots(
-        rows=2,
-        cols=1,
-        shared_xaxes=True,
-        vertical_spacing=0.10,
-        row_heights=[0.70, 0.30],
-        subplot_titles=(metric, "EV充電計画・SOC"),
-        specs=[[{}], [{"secondary_y": True}]],
-    )
-
-    x = df["hour"]
-
-    if metric == "エネルギー":
-        fig.add_trace(go.Scatter(x=x, y=df["pv_fc"], name="PV予測", mode="lines", line=dict(width=3)), row=1, col=1)
-        fig.add_trace(go.Scatter(x=x, y=df["load_fc"], name="需要予測", mode="lines", line=dict(width=3)), row=1, col=1)
-        if stage == "実際には…":
-            fig.add_trace(go.Scatter(x=x, y=df["pv_act"], name="PV実績（午前は曇り）", mode="lines", line=dict(width=2, dash="dot")), row=1, col=1)
-            fig.add_trace(go.Scatter(x=x, y=df["load_act"], name="需要実績", mode="lines", line=dict(width=2, dash="dot")), row=1, col=1)
-        if updated_df is not None:
-            fig.add_trace(go.Scatter(x=x, y=updated_df["pv_upd"], name="朝7時更新PV予測", mode="lines", line=dict(width=3, dash="dash")), row=1, col=1)
-        ylabel = "kW"
-
-    elif metric == "CO₂原単位":
-        fig.add_trace(go.Scatter(x=x, y=df["ci_fc"], name="CI予測", mode="lines", line=dict(width=3)), row=1, col=1)
-        ylabel = "kg-CO₂/kWh"
-
-    else:
-        fig.add_trace(go.Scatter(x=x, y=df["price_act"], name="電気料金（固定）", mode="lines", line=dict(width=2, dash="dot")), row=1, col=1)
-#        fig.add_trace(go.Scatter(x=x, y=df["price_fc"], name="電気料金（固定）", mode="lines", line=dict(width=3)), row=1, col=1)
-#        if stage == "実際には…":
-#        if updated_df is not None:
-#            fig.add_trace(go.Scatter(x=x, y=updated_df["price_upd"], name="電気料金（固定）", mode="lines", line=dict(width=3, dash="dash")), row=1, col=1)
-        ylabel = "円/kWh"
-
-    fig.add_trace(go.Bar(x=x, y=schedule, name=plan_label, opacity=0.72), row=2, col=1)
-
-    available = df["available_plan"].to_numpy()
-    in_block = False
-    block_start = None
-    for i, is_available in enumerate(available):
-        if is_available and not in_block:
-            block_start = df.loc[i, "hour"]
-            in_block = True
-        if in_block and (not is_available or i == len(available) - 1):
-            block_end = df.loc[i, "hour"] if not is_available else df.loc[i, "hour"] + 1
-            fig.add_vrect(
-                x0=block_start - 0.5,
-                x1=block_end - 0.5,
-                fillcolor="lightgray",
-                opacity=0.12,
-                line_width=0,
-                row=2,
-                col=1,
-            )
-            in_block = False
-
-    if update_hour is not None:
-        fig.add_vline(
-            x=update_hour,
-            line_width=2,
-            line_dash="dash",
-            annotation_text="情報更新",
-            annotation_position="top",
-        )
-
-    ticks = list(range(0, 32, 2))
-    fig.update_xaxes(
-        tickmode="array",
-        tickvals=ticks,
-        ticktext=[f"{h % 24:02d}:00" for h in ticks],
-        title_text="時刻",
-        row=2,
-        col=1,
-    )
-    fig.update_yaxes(title_text=ylabel, row=1, col=1)
-    fig.update_yaxes(
-        title_text="充電電力 (kW)",
-        range=[0, CHARGER_POWER * 1.25],
-        row=2,
-        col=1,
-        secondary_y=False,
-    )
-    fig.update_yaxes(
-        title_text="SOC (%)",
-        range=[0, 100],
-        row=2,
-        col=1,
-        secondary_y=True,
-        showgrid=False,
-    )
-    # EV SOC on the right-hand axis of the lower panel.
-    fig.add_trace(
-        go.Scatter(
-            x=df["hour"],
-            y=soc_series,
-            mode="lines+markers",
-            name="EV SOC",
-            line=dict(width=2),
-        ),
-        row=2,
-        col=1,
-        secondary_y=True,
-    )
-    fig.add_hline(
-        y=0,
-        line_dash="dot",
-        line_width=1,
-        annotation_text="SOC 0%（電欠）",
-        annotation_position="bottom right",
-        row=2,
-        col=1,
-        secondary_y=True,
-    )
-    fig.add_hline(
-        y=DAY_TYPES[day_type]["required_soc"],
-        line_dash="dash",
-        line_width=1,
-        annotation_text="翌朝必要SOC",
-        annotation_position="top right",
-        row=2,
-        col=1,
-        secondary_y=True,
-    )
-
-    fig.update_layout(
-        template="plotly_white",
-        height=570,
-        legend=dict(orientation="h", yanchor="bottom", y=1.04, xanchor="center", x=0.5),
-        margin=dict(t=65, b=25, l=50, r=55),
-        barmode="overlay",
-    )
-    return fig
-
-
 def metric_delta(actual, forecast, digits=2):
     delta = actual - forecast
     if digits == 0:
@@ -670,350 +445,189 @@ def make_actual_comparison_figure(df, metric, original_schedule, original_soc,
     return fig
 
 
-# ============================================================
-# 1. Conditions + charging plan
-# ============================================================
-with st.sidebar:
-    st.header("条件設定")
 
-    day_type = st.radio(
-        "生活パターン",
-        list(DAY_TYPES.keys()),
-        horizontal=True,
-    )
-    cfg = DAY_TYPES[day_type]
-
-    st.markdown("#### 今日の予定")
-    for item in cfg["summary"]:
-        st.write(f"・{item}")
-
-    st.markdown("#### EV")
-    st.write(f"当日0:00時点のSOC：**{INITIAL_SOC:.0f}%**")
-    st.write(f"翌朝の走行に必要なSOC：**{cfg['required_soc']:.0f}%**")
-#    if day_type == "☀️ 休日":
-#        st.caption(f"外出中のSOC消費：1時間あたり {cfg['away_soc_per_hour']:.0f}ポイント")
-#    else:
-#        st.caption(f"外出中のSOC消費：1時間あたり {cfg['away_soc_per_hour']:.0f}ポイント")
-#    st.caption(cfg["description"])
-
-    st.markdown("#### 予測情報について")
-    st.caption("CO₂原単位と電気料金は既知とする")
-
-    st.markdown("#### 電気料金")
-#    st.caption("夜トク8相当：7:00–23:00 42.60円/kWh、23:00–翌7:00 31.64円/kWh（燃料費調整等は省略）")
-    st.caption("東電EP 夜トク8相当")
-
-# Compact control band
-control_title, control_strategy = st.columns([1.0, 5.0], vertical_alignment="center")
-with control_title:
-    st.markdown("**充電方法**")
-with control_strategy:
-    strategy = st.radio(
-        "充電方法",
-        list(STRATEGIES.keys()),
-        horizontal=True,
-        label_visibility="collapsed",
-    )
-
-selected_hours = []
-if strategy == "🕒 自分で設定":
-    with st.sidebar:
-        st.markdown("#### 充電する時間を自分で選択")
-        #st.caption(
-        #    "充電したい1時間枠を選んでください。"
-        #    "EVが外出している時間も選択できますが、その時間の充電は実行できません。"
-        #)
-        selectable_hours = list(range(0, cfg["planned_departure_abs"]))
-        selected_hours = st.pills(
-            "充電する時間",
-            options=selectable_hours,
-            selection_mode="multi",
-            format_func=lambda h: hour_label(h),
-            key="selected_charge_hours",
-            label_visibility="collapsed",
-        )
-
-metric = st.radio(
-    "グラフで見る情報",
-    ["エネルギー", "CO₂原単位", "電気料金"],
-    horizontal=True,
-    label_visibility="collapsed",
-)
-
-# ============================================================
-# 2. Forecast-based plan -> what actually happened
-# ============================================================
-stage = st.radio(
-    "表示",
-    ["前日の予測で計画", "朝7時に予測更新", "実際には…"],
-    horizontal=True,
-    label_visibility="collapsed",
-)
-
-# Forecasts and actual values for the same teaching day.
-df, actual_departure_abs, actual_windows = generate_profiles(day_type)
-
-# --- Initial plan made on the previous day ---
-plan_request = strategy_schedule(
-    df,
-    strategy,
-    day_type,
-    selected_hours=selected_hours,
-)
-plan_schedule, plan_soc, plan_operation = execute_operation(
-    df,
-    plan_request,
-    day_type,
-    availability_col="available_plan",
-)
-forecast_result = evaluate_executed_operation(
-    df,
-    plan_schedule,
-    plan_soc,
-    mode="forecast",
-)
-
-# --- 07:00 update and possible replanning ---
-UPDATE_HOUR = 7
-# Keep the saved plan separate from the conditional widget: Streamlit may
-# remove widget state when the update screen is no longer displayed.
-replan_context = (day_type, strategy, tuple(sorted(selected_hours)))
-if st.session_state.get("replan_context") != replan_context:
-    st.session_state["replan_context"] = replan_context
-    st.session_state["saved_updated_charge_hours"] = [
-        h for h in selected_hours if h >= UPDATE_HOUR
-    ]
-    st.session_state.pop("updated_selected_charge_hours", None)
+# Three-stage student workflow. Durable plans are independent of widget state.
+def reset_exercise():
+    st.session_state["step"] = 1
+    st.session_state["draft_hours"] = []
+    st.session_state["original_hours"] = []
+    st.session_state["revised_hours"] = []
 
 
-def save_updated_charge_hours():
-    st.session_state["saved_updated_charge_hours"] = list(
-        st.session_state["updated_selected_charge_hours"]
-    )
-
-
-if stage == "朝7時に予測更新":
-    st.caption("朝7時の更新予報：**9:00–12:00は曇りそう**")
-
-    if strategy == "🕒 自分で設定":
-        with st.sidebar:
-            st.markdown("#### 朝7時：計画を見直す")
-            st.caption(
-                "0:00–7:00の実行結果は固定し、7:00以降の充電時間を見直します。"
-                "元の計画や生活パターン・充電方法を変えた場合は、見直し案を初期化します。"
-                "外出中の時間を選んでも、その時間の充電は実行されません。"
-            )
-            # Restore the editor after its widget state was cleaned up while
-            # viewing another stage. The saved plan survives that cleanup.
-            if "updated_selected_charge_hours" not in st.session_state:
-                st.session_state["updated_selected_charge_hours"] = list(
-                    st.session_state["saved_updated_charge_hours"]
-                )
-            st.pills(
-                "更新後に充電する時間",
-                options=list(range(UPDATE_HOUR, cfg["planned_departure_abs"])),
-                selection_mode="multi",
-                format_func=lambda h: hour_label(h),
-                key="updated_selected_charge_hours",
-                on_change=save_updated_charge_hours,
-                label_visibility="collapsed",
-            )
-
-updated_selected_hours = [h for h in selected_hours if h < UPDATE_HOUR] + [
-    h for h in st.session_state["saved_updated_charge_hours"]
-    if UPDATE_HOUR <= h < cfg["planned_departure_abs"]
-]
-updated_request = strategy_schedule(
-    df,
-    strategy,
-    day_type,
-    selected_hours=updated_selected_hours,
-)
-# Replay the identical executed prefix before simulating the revised future.
-# The deterministic physical model therefore carries the exact 07:00 SOC
-# (and any prior driving infeasibility) into the revised trajectory.
-past_mask = df["hour"].to_numpy() < UPDATE_HOUR
-updated_request[past_mask] = plan_schedule[past_mask]
-updated_schedule, updated_soc, updated_operation = execute_operation(
-    df,
-    updated_request,
-    day_type,
-    availability_col="available_plan",
-)
-updated_result = evaluate_executed_operation(
-    df,
-    updated_schedule,
-    updated_soc,
-    mode="updated",
-)
-
-# --- Actual outcome ---
-# The morning-updated plan is executed under actual EV availability.
-actual_schedule, actual_soc, actual_operation = execute_operation(
-    df,
-    updated_request,
-    day_type,
-    availability_col="available_actual",
-)
-actual_result = evaluate_executed_operation(
-    df,
-    actual_schedule,
-    actual_soc,
-    mode="actual",
-)
-
-# Counterfactual baseline: the original plan under exactly the same actual conditions.
-original_actual_schedule, original_actual_soc, original_actual_operation = execute_operation(
-    df, plan_request, day_type, availability_col="available_actual",
-)
-original_actual_result = evaluate_executed_operation(
-    df, original_actual_schedule, original_actual_soc, mode="actual",
-)
-
-if stage == "実際には…":
-    st.caption(
-        "実際の天気：**9:00–12:00は曇り，12:00以降は晴れ**．"
-        "同じ実績条件で、元の計画の継続と朝7時の更新計画を比較．"
-    )
-
-if stage == "前日の予測で計画":
-    display_schedule = plan_schedule
-    display_result = forecast_result
-    display_soc = plan_soc
-    display_operation = plan_operation
-    displayed_selected_hours = selected_hours
-    plan_label = "前日の予測に基づく充電計画"
-elif stage == "朝7時に予測更新":
-    display_schedule = updated_schedule
-    display_result = updated_result
-    display_soc = updated_soc
-    display_operation = updated_operation
-    displayed_selected_hours = updated_selected_hours
-    plan_label = "朝7時の更新予測に基づく充電計画"
-else:
-    display_schedule = actual_schedule
-    display_result = actual_result
-    display_soc = actual_soc
-    display_operation = actual_operation
-    displayed_selected_hours = updated_selected_hours
-    plan_label = "朝7時に更新した充電計画"
-
-display_infeasible_hours = (
-    infeasible_selected_hours(df, displayed_selected_hours)
-    if strategy == "🕒 自分で設定"
-    else []
-)
-
-# ============================================================
-# Forecast planning view / same-condition actual comparison
-# ============================================================
-final_soc = float(display_soc[-1]) if len(display_soc) > 0 else INITIAL_SOC
-required_soc = float(DAY_TYPES[day_type]["required_soc"])
-
-if stage == "実際には…":
-    st.markdown("#### 同じ実績条件での計画比較")
-    st.caption("天候・家庭需要・電力料金・CO₂排出原単位・EV利用予定は両案で共通。変更するのは朝7時以降の充電計画。")
-    st.plotly_chart(
-        make_actual_comparison_figure(df, metric, original_actual_schedule, original_actual_soc,
-                                      actual_schedule, actual_soc, day_type),
-        use_container_width=True,
-    )
-    if np.allclose(original_actual_schedule, actual_schedule):
-        st.info("両案の実行される充電時間・電力は同じです。計画変更による評価の差はありません。")
-    st.dataframe(
-        comparison_table(original_actual_result, actual_result,
-                         "元の計画を継続", "更新後の計画",
-                         original_actual_operation, actual_operation, required_soc,
-                         "差（更新後−元）"),
-        hide_index=True, use_container_width=True,
-    )
-    st.caption(f"CO₂・料金はEV充電に伴う系統購入分を集計。制約：走行中の電欠なし・翌朝SOC {required_soc:.0f}%以上。総充電量・翌朝SOCも合わせて比較。")
-    for label, result, operation in [
-        ("元の計画", original_actual_result, original_actual_operation),
-        ("更新後の計画", actual_result, actual_operation),
-    ]:
-        status = feasibility_label(result, operation, required_soc)
-        if status != "充足":
-            st.warning(f"{label}：{status}。数値が小さくても実行可能な案としては採用できません。")
-
-    with st.expander("予測時の評価と実績条件での評価の違い", expanded=False):
-        st.caption("ここでは各計画を固定し、評価に用いる予測と実績の違いを比較。上の表の『計画変更の効果』とは別の比較。")
-        st.markdown("##### 元の計画：前日の予測と実績")
-        st.dataframe(
-            comparison_table(forecast_result, original_actual_result,
-                             "前日の予測での評価", "実績条件での評価",
-                             plan_operation, original_actual_operation, required_soc,
-                             "差（実績−予測）"),
-            hide_index=True, use_container_width=True,
-        )
-        st.markdown("##### 更新後の計画：朝7時の予測と実績")
-        st.dataframe(
-            comparison_table(updated_result, actual_result,
-                             "朝7時の予測での評価", "実績条件での評価",
-                             updated_operation, actual_operation, required_soc,
-                             "差（実績−予測）"),
-            hide_index=True, use_container_width=True,
-        )
-else:
-    col_graph, col_kpi = st.columns([3.2, 1.0], gap="large")
-    with col_graph:
-        st.plotly_chart(
-            make_main_figure(
-                df=df, metric=metric, schedule=display_schedule, soc_series=display_soc,
-                day_type=day_type,
-                updated_df=df if stage == "朝7時に予測更新" else None,
-                update_hour=7 if stage == "朝7時に予測更新" else None,
-                plan_label=plan_label,
-            ),
-            use_container_width=True,
-        )
-    with col_kpi:
-        st.markdown("#### 期待される結果")
-        st.metric("CO₂排出量", f"{display_result['co2_kg']:.2f} kg")
-        st.metric("EV充電コスト", f"{display_result['cost_yen']:.0f} 円")
-        st.metric("PVからの充電", f"{display_result['pv_to_ev_kwh']:.1f} kWh")
-        st.metric("翌朝の出発時SOC", f"{final_soc:.0f}%", delta=f"必要SOC {required_soc:.0f}%")
-        st.caption("いずれも、現時点の予測に基づく評価です。")
-    if not display_operation["driving_feasible"]:
-        st.error("走行中に電欠が発生するため、この計画は実行不可能です。")
-    elif final_soc + 1e-9 < required_soc:
-        st.warning("走行は可能ですが、翌朝の出発時に必要SOCへ届きません。")
+def toggle_hour(hour, field):
+    values = set(st.session_state[field])
+    if hour in values:
+        values.remove(hour)
     else:
-        st.success("走行中のSOCと、翌朝の出発時に必要なSOCの両方を満たしています。")
+        values.add(hour)
+    st.session_state[field] = sorted(values)
 
-if display_infeasible_hours:
-    st.warning(
-        "選択した時間のうち実行できない時間："
-        + "、".join(hour_label(h) for h in display_infeasible_hours)
-        + "（EVが外出中）"
+
+def confirm_original():
+    st.session_state["original_hours"] = list(st.session_state["draft_hours"])
+    st.session_state["revised_hours"] = list(st.session_state["draft_hours"])
+    st.session_state["step"] = 2
+
+
+def go_to(step):
+    st.session_state["step"] = step
+
+
+def keep_original():
+    st.session_state["revised_hours"] = list(st.session_state["original_hours"])
+    st.session_state["step"] = 3
+
+
+def calculate(hours, mode):
+    request = np.where(df["hour"].isin(hours), CHARGER_POWER, 0.0)
+    schedule, soc, operation = execute_operation(
+        df, request, day_type,
+        availability_col="available_actual" if mode == "actual" else "available_plan",
     )
+    return schedule, soc, operation, evaluate_executed_operation(df, schedule, soc, mode)
 
-# ============================================================
-# Teaching prompts
-# ============================================================
-#st.divider()
-#st.subheader("考えてみよう")
 
-#if stage != "実際には…":
-#    st.markdown(
-#        """
-#- 3つの充電方法を切り替えると、**CO₂・料金・PV利用量**はどう変わりますか？
-#- 充電する時間を変えると、CO₂と電気料金はそれぞれどう変わるでしょうか？
-#- 「一番よい充電方法」を一つだけ決めることはできるでしょうか？
-#"""
-#    )
-#else:
-#    st.markdown(
-#        """
-#- 天気予報・予測結果を見て決めた計画は、実際の結果ではどう評価が変わりましたか？
-#- PV発電量の予測が外れると、**PV利用量・CO₂排出量・電気料金**のどれが変わるでしょうか？
-#- 未来が完全には分からないなら、計画を立てた後に何を観測し、どう更新するとよいでしょうか？
-#"""
-#    )
-#with st.expander("補足：休日と平日でPV利用が変わるのはなぜ？"):
-#    st.write(
-#        "休日は10時以降にEVが自宅にあるため、PVがよく発電する昼間に充電できます。"
-#        "一方、平日は昼間にEVが外出しているため、PVが発電していてもEV充電には使えません。"
-#        "同じ設備・同じPVでも、**人の行動やEVの在宅時間によって利用できるエネルギーが変わる**ことがポイントです。"
-#    )
+def profile_figure(mode, metric):
+    fig = go.Figure()
+    if metric == "電力需要・PV":
+        cols = [("load_fc", "家庭需要予測", "#546e7a", "solid"),
+                ("pv_fc", "前日のPV予測", "#3277b3", "solid")]
+        if mode == "updated":
+            cols.append(("pv_upd", "朝7時のPV予測", "#269460", "dash"))
+        unit = "kW"
+    else:
+        cols = [("ci_fc" if metric == "CO₂原単位" else "price_fc", metric, "#3277b3", "solid")]
+        unit = "kg-CO₂/kWh" if metric == "CO₂原単位" else "円/kWh"
+    for column, label, color, dash in cols:
+        fig.add_trace(go.Scatter(x=df["hour"], y=df[column], name=label,
+                                line=dict(color=color, dash=dash, width=2)))
+    if mode == "updated":
+        fig.add_vrect(x0=0, x1=7, fillcolor="#adb5bd", opacity=0.15, line_width=0)
+        fig.add_vline(x=7, line_dash="dash", line_width=1)
+    fig.update_layout(height=200, template="plotly_white", margin=dict(t=25,b=20,l=35,r=15),
+                      legend=dict(orientation="h", y=1.18), yaxis_title=unit)
+    ticks=list(range(0,33,4))
+    fig.update_xaxes(range=[0,32],tickvals=ticks,
+                     ticktext=[f"{'翌' if h>=24 else ''}{h%24:02d}:00" for h in ticks])
+    return fig
 
+
+def render_editor(field, fixed_before=0):
+    selected=set(st.session_state[field])
+    for start in [0,8,16,24]:
+        st.caption("当日" if start==0 else ("翌日" if start==24 else "当日（続き）"))
+        columns=st.columns(8)
+        for offset,column in enumerate(columns):
+            h=start+offset
+            available=bool(df.loc[df["hour"]==h,"available_plan"].iloc[0])
+            fixed=h<fixed_before
+            status=("充電済" if h in selected else "固定") if fixed else ("外出" if not available else ("充電" if h in selected else "未選択"))
+            with column:
+                st.button(f"{h%24:02d}–{h%24+1:02d}" + (f" {status}" if status != "未選択" else ""),
+                          key=f"slot_{field}_{h}", disabled=fixed or not available,
+                          type="primary" if h in selected else "secondary",
+                          on_click=toggle_hour,args=(h,field),use_container_width=True)
+
+
+def render_soc(schedule, soc):
+    fig=make_subplots(specs=[[{"secondary_y":True}]])
+    fig.add_trace(go.Bar(x=df["hour"][:32]+0.5,y=schedule[:32],name="充電電力"),secondary_y=False)
+    fig.add_trace(go.Scatter(x=np.arange(33),y=np.r_[INITIAL_SOC,soc[:32]],name="SOC"),secondary_y=True)
+    fig.add_hline(y=required_soc,line_dash="dot",secondary_y=True)
+    fig.update_yaxes(range=[0,CHARGER_POWER*1.25],title_text="kW",secondary_y=False)
+    fig.update_yaxes(range=[0,100],title_text="SOC [%]",secondary_y=True)
+    fig.update_layout(height=280,template="plotly_white",margin=dict(t=30,b=30,l=35,r=35),legend=dict(orientation="h",y=1.2))
+    ticks=list(range(0,33,4));fig.update_xaxes(tickvals=ticks,ticktext=[f"{'翌' if h>=24 else ''}{h%24:02d}:00" for h in ticks])
+    st.plotly_chart(fig,use_container_width=True)
+
+
+if "step" not in st.session_state:
+    reset_exercise()
+step=st.session_state["step"]
+with st.sidebar:
+    st.markdown("### 生活パターン")
+    day_type=st.radio("生活パターン",list(DAY_TYPES),key="exercise_day",disabled=step!=1,
+                      on_change=reset_exercise,label_visibility="collapsed")
+    cfg=DAY_TYPES[day_type]
+    st.markdown("### EVの利用予定")
+    for item in cfg["summary"]:
+        st.write(item)
+    st.markdown("### 充電条件")
+    st.write("初期SOC：30% ／ 翌朝必要SOC：80%以上")
+    st.write("容量：40 kWh ／ 充電電力：3 kW")
+    st.caption("1時間枠ごとに充電。効率95%。満充電時には停止。")
+    st.caption(f"外出中のSOC消費：1時間あたり{cfg['away_soc_per_hour']:g}ポイント")
+    st.caption("CO₂原単位・料金は既知。CO₂・料金の評価対象はEV充電に伴う系統購入分。")
+    st.button("最初から計画を作り直す",on_click=reset_exercise,use_container_width=True)
+
+df,_,_=generate_profiles(day_type)
+required_soc=cfg["required_soc"]
+for col,i,title in zip(st.columns(3),[1,2,3],["充電計画の作成","予測更新と見直し","実績条件での比較"]):
+    with col:
+        st.markdown(f"{'**' if step==i else ''}{i}．{title}{'**' if step==i else ''}")
+
+if step in (1,2):
+    mode="forecast" if step==1 else "updated"
+    field="draft_hours" if step==1 else "revised_hours"
+    if step==2:
+        # Always preserve the original executed past, even across navigation.
+        st.session_state[field]=sorted([h for h in st.session_state['original_hours'] if h<7]+[h for h in st.session_state[field] if h>=7])
+        st.caption("朝7時の更新予測：9〜12時は曇り。0〜7時の実行結果を固定し、7時以降を見直し。")
+    else:
+        st.caption("前日の予測をもとに、当日0時〜翌朝8時の充電時間を選択。")
+    metric=st.radio("予測情報",["電力需要・PV","CO₂原単位","電気料金"],horizontal=True)
+    st.plotly_chart(profile_figure(mode,metric),use_container_width=True)
+    st.markdown("#### 充電する時間")
+    st.caption("色付き：充電を選択 ／ 外出中は選択不可。各ボタンは開始〜終了の1時間枠。")
+    render_editor(field,7 if step==2 else 0)
+    schedule,soc,operation,result=calculate(st.session_state[field],mode)
+    cols=st.columns(4)
+    for col,label,value in zip(cols,["翌朝の出発時SOC","CO₂排出量（予測）","充電コスト（予測）","PVからの充電（予測）"],
+                               [f"{result['final_soc']:.1f}%",f"{result['co2_kg']:.2f} kg",f"{result['cost_yen']:.0f} 円",f"{result['pv_to_ev_kwh']:.1f} kWh"]):
+        col.metric(label,value)
+    status=feasibility_label(result,operation,required_soc)
+    # Plain text avoids the default emoji status icons.
+    st.markdown(f"**制約の確認：{status}**")
+    with st.expander("充電量・SOCの推移を確認",expanded=False):
+        st.write(f"総充電量：{result['charge_kwh']:.1f} kWh")
+        render_soc(schedule,soc)
+    if step==2:
+        base_schedule,base_soc,base_op,base_result=calculate(st.session_state['original_hours'],'updated')
+        with st.expander("同じ更新予測で元の計画と比較",expanded=False):
+            st.dataframe(comparison_table(base_result,result,"元の計画","見直し案",base_op,operation,required_soc,"差（見直し案−元）"),hide_index=True,use_container_width=True)
+        c1,c2,c3=st.columns(3)
+        c1.button("元の計画の編集に戻る",on_click=go_to,args=(1,),use_container_width=True)
+        c2.button("変更せず結果へ進む",on_click=keep_original,use_container_width=True)
+        c3.button("見直した計画で結果へ進む",on_click=go_to,args=(3,),disabled=status!="充足",type="primary",use_container_width=True)
+    else:
+        st.button("この計画を確定して朝7時へ進む",on_click=confirm_original,disabled=status!="充足",type="primary",use_container_width=True)
+else:
+    original_schedule,original_soc,original_op,original_result=calculate(st.session_state['original_hours'],'actual')
+    revised_schedule,revised_soc,revised_op,revised_result=calculate(st.session_state['revised_hours'],'actual')
+    st.caption("実績：9〜12時は曇り、12時以降は晴れ。両案に同じ天候・家庭需要・料金・CO₂原単位・EV利用予定を適用。")
+    st.dataframe(comparison_table(original_result,revised_result,"元の計画を継続","更新後の計画",original_op,revised_op,required_soc,"差（更新後−元）"),hide_index=True,use_container_width=True)
+    if np.allclose(original_schedule,revised_schedule):
+        st.caption("両案の充電計画は同一。計画変更による差はなし。")
+    fig=make_subplots(rows=2,cols=1,shared_xaxes=True,subplot_titles=("元の計画を継続","更新後の計画"),vertical_spacing=0.22)
+    for row,sch,color in [(1,original_schedule,'#3277b3'),(2,revised_schedule,'#269460')]:
+        fig.add_trace(go.Bar(x=df['hour'][:32]+0.5,y=sch[:32],marker_color=color,showlegend=False,width=0.85),row=row,col=1)
+        fig.update_yaxes(range=[0,CHARGER_POWER*1.25],title_text="kW",row=row,col=1)
+        fig.add_vrect(x0=0,x1=7,fillcolor='#adb5bd',opacity=0.15,line_width=0,row=row,col=1)
+        fig.add_vline(x=7,line_dash='dash',line_width=1,row=row,col=1)
+    ticks=list(range(0,33,4));fig.update_xaxes(range=[0,32],tickvals=ticks,ticktext=[f"{'翌' if h>=24 else ''}{h%24:02d}:00" for h in ticks])
+    fig.update_layout(height=310,template='plotly_white',margin=dict(t=30,b=25,l=30,r=20))
+    st.plotly_chart(fig,use_container_width=True)
+    st.caption("灰色部分：朝7時以前の固定済みの実行結果。SOCの差はポイント表示。制約：走行中の電欠なし・翌朝SOC80%以上。")
+    with st.expander("実績条件とSOCの推移を詳しく確認",expanded=False):
+        metric=st.radio("実績情報",["エネルギー","CO₂原単位","電気料金"],horizontal=True)
+        st.plotly_chart(make_actual_comparison_figure(df,metric,original_schedule,original_soc,revised_schedule,revised_soc,day_type),use_container_width=True)
+    with st.expander("予測時の評価と実績条件での評価の違い",expanded=False):
+        st.caption("各計画を固定し、予測と実績の違いのみを比較。計画変更の効果とは別の比較。")
+        for title,hours,mode,actual,op in [
+            ('元の計画：前日の予測と実績',st.session_state['original_hours'],'forecast',original_result,original_op),
+            ('更新後の計画：朝7時の予測と実績',st.session_state['revised_hours'],'updated',revised_result,revised_op),
+        ]:
+            _,_,pred_op,pred_result=calculate(hours,mode)
+            st.markdown(f"##### {title}")
+            st.dataframe(comparison_table(pred_result,actual,"予測での評価","実績条件での評価",pred_op,op,required_soc,"差（実績−予測）"),hide_index=True,use_container_width=True)
+    st.button("朝7時の見直しに戻る",on_click=go_to,args=(2,),use_container_width=True)
