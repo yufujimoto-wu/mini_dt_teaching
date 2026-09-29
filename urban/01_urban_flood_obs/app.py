@@ -10,7 +10,6 @@ PUMP_COUNT = 3
 PUMP_DROP = 0.25  # m, same-cell reduction over the fixed intervention interval
 THRESHOLD = 0.10  # m, damage starts above this depth
 STRATEGIES = ("空間を均等にカバー", "重要地区を重点観測", "低地を重点観測")
-STAGES = ("1｜真値と配置", "2｜少数の観測", "3｜DTで推定", "4｜センサ数", "5｜配置戦略")
 
 
 @dataclass(frozen=True)
@@ -100,14 +99,15 @@ def gains(depth, weight):
 
 def dispatch(depth, weight):
     # Stable index breaks ties; additive, disjoint effects => exact optimal top-3.
-    return np.argsort(-gains(depth, weight), kind="stable")[:PUMP_COUNT]
+    ids = np.array(list(CANDIDATES))
+    return ids[np.argsort(-gains(depth, weight)[ids], kind="stable")[:PUMP_COUNT]]
 
 
 def evaluate(city, pumps):
     pumps = np.asarray(pumps, dtype=int)
     if len(pumps) > PUMP_COUNT or len(set(pumps.tolist())) != len(pumps):
         raise ValueError("ポンプは異なる地点に最大3台です")
-    if np.any((pumps < 0) | (pumps >= N*N)):
+    if any(int(i) not in CANDIDATES for i in pumps):
         raise ValueError("都市外の地点です")
     post = city.truth.copy()
     post[pumps] = np.maximum(0, post[pumps] - PUMP_DROP)
@@ -122,7 +122,7 @@ def evaluate(city, pumps):
 def run_design(city, count, strategy, sigma):
     sensors = sensor_order(city, strategy)[:count]
     values = observe(city, sensors, sigma)
-    prediction = estimate(city, sensors, values)
+    prediction, _ = estimate_sources(city.xy, city.prior, make_reports(city), sensors, values, sigma, "通報＋センサ・現地測定")
     pumps = dispatch(prediction, city.weight)
     result = evaluate(city, pumps)
     result.update(sensors=sensors, values=values, prediction=prediction, pumps=pumps,
@@ -134,308 +134,247 @@ def cell_name(i):
     return f"{chr(65 + int(i)//N)}{int(i)%N + 1:02d}"
 
 
-def toggle_pump(pumps, cell):
-    """Toggle one valid cell, preserving the three-truck limit."""
-    updated = list(pumps)
-    if isinstance(cell, bool) or not isinstance(cell, int) or not 0 <= cell < N*N:
-        return updated
-    if cell in updated:
-        updated.remove(cell)
-    elif len(updated) < PUMP_COUNT:
-        updated.append(cell)
-    return updated
+# Fixed feasible districts, independent of the hidden flood realization.
+CANDIDATES = {12:"北西住宅", 18:"病院東側", 27:"病院南側", 44:"中心市街地",
+              55:"駅前", 62:"西部住宅", 73:"避難所周辺", 87:"南東住宅"}
+SOURCES = ("事前情報のみ", "通報を追加", "通報＋センサ・現地測定")
+STEPS = ("1. 支援要請の整理", "2. 観測・推定による見直し", "3. 実績条件での比較", "4. 観測設計の比較")
+
+@dataclass(frozen=True)
+class Report:
+    cell: int
+    kind: str
+    text: str
+    value: float | None = None
+    sigma: float = .08
+    count: int = 1
+    time: str = "10:00"
 
 
-def grid_payload(city, field, sensors, values, pumps, exposure=False):
-    """Only visible data cross the iframe boundary; never send hidden truth."""
-    from plotly.colors import sample_colorscale
-    observations = {int(i): f"{v:.2f}" for i,v in zip(sensors,values)}
-    palette = "YlOrBr" if exposure else "Blues"
-    shown = city.weight if exposure else field
-    maximum = 12 if exposure else 1
-    colors = sample_colorscale(palette, np.clip(shown/maximum,0,1).tolist()) if shown is not None else ["#e8edf2"]*(N*N)
-    cells = []
-    for i in range(N*N):
-        value = f"重要度 {city.weight[i]:.2f}" if exposure else f"水深 {shown[i]:.3f} m" if shown is not None else f"観測値 {observations[i]} m（真値は非表示）" if i in observations else "未観測・真値は非表示"
-        description = f"{cell_name(i)} ｜ {value} ｜ 重要度 {city.weight[i]:.2f}"
-        if i in observations:
-            description += f" ｜ 観測 {observations[i]} m"
-        cells.append(dict(name=cell_name(i), color=colors[i], important=bool(city.weight[i]>=6.0),
-                          selected=i in pumps, observed=observations.get(i), description=description))
-    ramp = sample_colorscale(palette,[0,.25,.5,.75,1])
-    return dict(cells=cells,legend="重要度" if exposure else "浸水深",range="0–12" if exposure else "0–1 m",
-                ramp="linear-gradient(to right, "+", ".join(ramp)+")")
+def make_reports(city):
+    """Synthetic evidence generated once; inference receives reports, never truth.
+
+    Duplicate calls are displayed but a shared incident contributes only once.
+    Numeric field measurement noise is separate from fixed sensor noise.
+    """
+    reports = [Report(55, "冠水の通報", "駅前の道路が冠水。水深・範囲は未確認", count=4),
+               Report(18, "冠水の通報", "病院東側の出入口前で冠水。場所・時刻の分かる写真あり"),
+               Report(62, "冠水の通報", "住宅地の交差点で冠水。周辺への広がりは未確認", count=2),
+               Report(73, "支援要請", "避難所周辺の排水支援要請。水深の記載なし"),
+               Report(44, "支援要請", "中心市街地から排水支援要請。水深の記載なし")]
+    for cell, error in ((27, .025), (62, -.035)):
+        value = round(max(0., float(city.truth[cell]) + error), 2)
+        reports.append(Report(cell, "現地測定", f"担当者による水深測定：約{value:.2f} m", value, .06))
+    return reports
 
 
+def estimate_sources(xy, prior, reports, sensors, values, sigma, source):
+    """Spatial prior + noisy numeric evidence + one-sided qualitative evidence.
 
-def apply_grid_event(state, event):
-    """Consume each click once; a rejected fourth truck does not change provenance."""
-    if not isinstance(event, dict) or not event.get("token") or event["token"] == state.get("grid_event"):
-        return False
-    state["grid_event"] = event["token"]
-    updated = toggle_pump(state["pumps"], event.get("cell"))
-    if updated != state["pumps"]:
-        state["pumps"] = updated
-        state["dispatch_source"] = {"kind": "manual"}
-    return True
-
-
-def condition_label(conditions):
-    scenario, count, strategy, sigma = conditions
-    return f"{['基本：局地豪雨', '病院周辺の雨が弱い', '病院周辺の雨が強い'][scenario]} / {count}台 / {strategy} / σ={sigma:.2f} m"
-
-
-def comparison_rows(before, after):
-    """Use the same model evaluation for every displayed comparison value."""
-    rows=[]
-    for label, conditions in (("変更前",before),("変更後（現在）",after)):
-        scenario,count,strategy,sigma=conditions
-        r=run_design(make_city(scenario),count,strategy,sigma)
-        rows.append({"時点":label,"センサ数":count,"配置戦略":strategy,"σ (m)":sigma,
-                     "推定誤差 (m)":r["rmse"],"自動派遣先":" / ".join(cell_name(i) for i in r["pumps"]),
-                     "減らせた被害":r["avoided"]})
-    return rows
-
-
-def comparison_message(before, after):
-    if before[0] != after[0]:
-        return "豪雨ケースも変わっています。観測条件の効果を比べるには同じ豪雨に戻すか、変更前を保存し直してください。"
-    if tuple(before)==tuple(after):
-        return "変更前と同じ条件です。サイドバーで比較対象の値を変えてください。"
-    a,b=comparison_rows(before,after)
-    error=b["推定誤差 (m)"]-a["推定誤差 (m)"]
-    benefit=b["減らせた被害"]-a["減らせた被害"]
-    error_text="推定誤差は減った" if error < -1e-9 else "推定誤差は増えた" if error > 1e-9 else "推定誤差は同じ"
-    same=set(a["自動派遣先"].split(" / "))==set(b["自動派遣先"].split(" / "))
-    dispatch_text="派遣先は同じ" if same else "派遣先が変わった"
-    benefit_text=f"減らせた被害は{abs(benefit):.2f}増えた" if benefit > 1e-9 else f"減らせた被害は{abs(benefit):.2f}減った" if benefit < -1e-9 else "減らせた被害は同じ"
-    return f"{error_text}。{dispatch_text}。{benefit_text}。"
+    'Flooded' supplies only a soft positive-depth constraint, not a guessed depth.
+    A small 0.02 m detection threshold is an explicit teaching assumption.
+    Source coverage is descriptive, NOT a calibrated confidence probability.
+    """
+    from scipy.optimize import minimize
+    prior = np.asarray(prior, dtype=float)
+    if source == SOURCES[0]:
+        return prior.copy(), np.zeros(len(prior), dtype=int)
+    numeric = []
+    qualitative = sorted({r.cell for r in reports if r.kind == "冠水の通報"})
+    if source == SOURCES[2]:
+        numeric += [(r.cell, r.value, r.sigma) for r in reports if r.kind == "現地測定"]
+        numeric += [(int(i), float(v), max(float(sigma), .005)) for i,v in zip(sensors, values)]
+    d2 = np.sum((xy[:,None]-xy[None,:])**2, axis=2)
+    covariance = .18**2 * np.exp(-d2/(2*1.8**2)) + np.eye(len(prior))*1e-6
+    chol = np.linalg.cholesky(covariance)
+    ids = np.array([n[0] for n in numeric], dtype=int)
+    vals = np.array([n[1] for n in numeric])
+    sd = np.array([n[2] for n in numeric])
+    q = np.array(qualitative, dtype=int)
+    def objective(z):
+        h = prior + chol @ z
+        residual = (h[ids]-vals)/sd
+        # An inequality likelihood; reports do not force a precise 0.02 m depth.
+        below = np.minimum(h[q]-.02, 0.)/.06
+        score = .5*(z@z + residual@residual + below@below)
+        grad = z + chol[ids].T@(residual/sd) + chol[q].T@(below/.06)
+        return score, grad
+    fit = minimize(objective, np.zeros(len(prior)), jac=True, method="L-BFGS-B",
+                   options={"maxiter":1000,"ftol":1e-11,"gtol":1e-7})
+    if not fit.success:
+        raise RuntimeError("状態推定の収束を確認できませんでした: " + fit.message)
+    direct = sorted(set(qualitative + ids.tolist()))
+    coverage = np.zeros(len(prior), dtype=int)
+    if direct:
+        coverage[np.min(d2[:,direct],axis=1) <= 1.8**2] = 1
+        coverage[direct] = 2
+    return np.maximum(0, prior+chol@fit.x), coverage
 
 
-def show_before_after(conditions):
-    import streamlit as st
-    import streamlit.components.v1 as components
-    from pathlib import Path
-    st.caption("① 現在の条件を変更前として保存 → ② サイドバーで条件を変更 → ③ 推定・派遣先・被害を比較")
-    st.caption("ここでは前後それぞれのDT推定から3台を自動派遣して比較します。手動で保持している配置は変更しません。")
-    before=st.session_state.get("comparison_before")
-    if before is None:
-        st.info("まず、比較の出発点にしたい条件をサイドバーで選び、「変更前」に保存してください。")
-        st.caption("現在："+condition_label(conditions))
-        return
-    same_weather=before[0]==conditions[0]
-    message=comparison_message(before,conditions)
-    if same_weather:
-        st.info(message)
+def map_figure(city, field, reports, sensors, values, pumps, coverage=None):
+    import plotly.graph_objects as go
+    fig = go.Figure()
+    if coverage is not None:
+        z=coverage.reshape(N,N); scale=[[0,"#e5e7eb"],[.49,"#e5e7eb"],[.5,"#bfdbfe"],[.99,"#bfdbfe"],[1,"#2563eb"]]
+        fig.add_trace(go.Heatmap(z=z, zmin=0,zmax=2,colorscale=scale,
+            colorbar=dict(tickvals=[0,1,2],ticktext=["主に事前情報","周辺に直接情報","直接情報あり"]),
+            hovertemplate="列%{x}・行%{y}<extra></extra>"))
     else:
-        st.warning(message)
-    rows=comparison_rows(before,conditions)
-    grid=components.declare_component("urban_flood_grid",path=str(Path(__file__).parent/"flood_grid"))
-    for col,row,config in zip(st.columns(2,gap="large"),rows,(before,conditions)):
-        with col:
-            st.subheader(row["時点"])
-            st.caption(condition_label(config))
-            c1,c2=st.columns(2)
-            c1.metric("推定の誤差 ↓",f"{row['推定誤差 (m)']:.3f} m")
-            c2.metric("減らせた被害 ↑",f"{row['減らせた被害']:.2f}")
-            st.write("自動派遣先："+row["自動派遣先"])
-            city=make_city(config[0])
-            r=run_design(city,*config[1:])
-            grid(**grid_payload(city,r["prediction"],r["sensors"],r["values"],r["pumps"]),
-                 interactive=False,ack=None,max_width=310,key="comparison_"+row["時点"],default=None)
-    st.caption("地図の色＝DT推定の浸水深（共通0〜1 m） / 黄色＝観測値 / 赤×＝その推定からの自動派遣先。被害削減は真値で評価。")
-    with st.expander("前後の数値表・CSV"):
-        st.dataframe(rows,hide_index=True,width="stretch")
-        import csv,io
-        buf=io.StringIO();writer=csv.DictWriter(buf,fieldnames=["豪雨ケース"]+list(rows[0]));writer.writeheader()
-        for row,config in zip(rows,(before,conditions)):
-            writer.writerow({"豪雨ケース":config[0],**row})
-        st.download_button("前後比較CSV",buf.getvalue().encode("utf-8-sig"),"before_after.csv","text/csv")
+        z=np.full((N,N),np.nan) if field is None else np.asarray(field).reshape(N,N)
+        fig.add_trace(go.Heatmap(z=z,zmin=0,zmax=1,colorscale="Blues",xgap=2,ygap=2,
+            colorbar=dict(title="浸水深 m"), hovertemplate="浸水深 %{z:.3f} m<extra></extra>"))
+    for r in reports:
+        shown = f"{r.time} {r.text}（{r.count}件）"
+        fig.add_trace(go.Scatter(x=[r.cell%N],y=[r.cell//N],mode="markers",
+            marker=dict(symbol="diamond-open" if r.kind!="現地測定" else "square",size=15,color="#9a3412",line=dict(width=2)),
+            text=[shown],hovertemplate="%{text}<extra></extra>",showlegend=False))
+    if len(sensors):
+        fig.add_trace(go.Scatter(x=np.asarray(sensors)%N,y=np.asarray(sensors)//N,mode="markers+text",
+            text=[f"{v:.2f}" for v in values],textposition="top center",textfont=dict(color="#713f12"),
+            marker=dict(size=8,color="#eab308"),name="センサ",hovertemplate="センサ %{text} m<extra></extra>"))
+    for i,name in CANDIDATES.items():
+        fig.add_trace(go.Scatter(x=[i%N],y=[i//N],mode="markers+text",text=[cell_name(i)],textposition="bottom center",
+            marker=dict(symbol="square-open",size=24,color="#be123c" if i in pumps else "#334155",line=dict(width=3 if i in pumps else 1)),
+            hovertext=[f"{name}｜重要度 {city.weight[i]:.2f}"],hovertemplate="%{hovertext}<extra></extra>",showlegend=False))
+    fig.update_layout(height=460,margin=dict(l=10,r=10,t=5,b=5),plot_bgcolor="#e5e7eb",showlegend=False,
+        xaxis=dict(range=[-.5,9.5],tickvals=list(range(10)),ticktext=list(range(1,11)),fixedrange=True),
+        yaxis=dict(range=[9.5,-.5],tickvals=list(range(10)),ticktext=list("ABCDEFGHIJ"),scaleanchor="x",fixedrange=True))
+    return fig
 
 
-def comparison_sidebar():
-    import streamlit as st
-    st.subheader("何を比較する？")
-    target=st.radio("比較する項目",["センサ数","配置戦略"],index=1,key="cmp_target",label_visibility="collapsed")
-    if target=="センサ数":
-        count=st.slider("センサ数",3,30,12,key="cmp_count")
-    else:
-        strategy=st.selectbox("配置戦略",STRATEGIES,key="cmp_strategy")
-    save_area=st.container()
-    change_area=st.container()
-    st.divider()
-    st.subheader("前後で揃える条件")
-    summary_area=st.container()
-    with st.expander("共通条件を設定"):
-        st.caption("共通条件を変更すると、保存した変更前をリセットします。")
-        if target=="センサ数":
-            strategy=st.selectbox("固定する配置戦略",STRATEGIES,key="cmp_strategy")
-        else:
-            count=st.slider("固定するセンサ数",3,30,12,key="cmp_count")
-        scenario=st.selectbox("豪雨ケース",[0,1,2],format_func=lambda i:condition_label((i,0,"",0)).split(" / ")[0],key="cmp_scenario")
-        sigma=st.selectbox("観測ノイズ σ（m）",[0.,.03,.10,.20],index=1,key="cmp_sigma")
-    conditions=(scenario,count,strategy,sigma)
-    signature=(target,scenario,sigma,strategy if target=="センサ数" else count)
-    if st.session_state.get("comparison_signature",signature)!=signature:
-        st.session_state.pop("comparison_before",None)
-        st.session_state["comparison_reset_notice"]=True
-    st.session_state["comparison_signature"]=signature
-    with save_area:
-        if st.button("現在の設定を「変更前」に保存",key="save_before",type="primary"):
-            st.session_state["comparison_before"]=conditions
-            st.session_state["comparison_reset_notice"]=False
-    with change_area:
-        before=st.session_state.get("comparison_before")
-        if before is None:
-            st.caption("変更前：未保存")
-        else:
-            st.caption("変更前："+(f"{before[1]}台" if target=="センサ数" else before[2]))
-        st.caption("変更後："+(f"{count}台" if target=="センサ数" else strategy))
-        if st.session_state.get("comparison_reset_notice"):
-            st.caption("比較項目・共通条件が変わったため、変更前をリセットしました。保存し直してください。")
-    with summary_area:
-        st.caption(f"配置戦略：{strategy}" if target=="センサ数" else f"センサ数：{count}台")
-        st.caption("豪雨ケース："+condition_label(conditions).split(" / ")[0])
-        st.caption(f"観測ノイズ：σ = {sigma:.2f} m")
-    return conditions
+def report_rows(reports):
+    return [{"地区":CANDIDATES[r.cell],"時刻":r.time,"種類":r.kind,"内容":r.text,
+             "件数":r.count,"推定への利用":"水深の数値（誤差あり）" if r.kind=="現地測定" else "冠水の条件のみ" if r.kind=="冠水の通報" else "要請として表示"} for r in reports]
 
 
 def main():
     import streamlit as st
-    st.set_page_config(page_title="Mini Urban Flood DT",page_icon="🌧️",layout="wide",initial_sidebar_state="expanded")
-    st.markdown("""<style>.block-container{padding-top:2rem;padding-bottom:.7rem;padding-left:2rem;padding-right:2rem;max-width:1450px}
-    h1{font-size:1.6rem!important} [data-testid=stMetricValue]{font-size:1.4rem}
-    [data-testid=stVerticalBlock]{gap:.55rem}</style>""",unsafe_allow_html=True)
+    st.set_page_config(page_title="Mini Urban Flood Digital Twin",layout="wide")
+    st.markdown("""<style>.block-container{padding-top:1.5rem;max-width:1500px}h1{font-size:1.7rem!important}
+    [data-testid=stMetricValue]{font-size:1.6rem}</style>""",unsafe_allow_html=True)
     st.title("Mini Urban Flood Digital Twin")
+    st.caption("複数の排水支援要請に対する優先配分 ｜ 同じ10:00時点の情報を順に追加")
     with st.sidebar:
-        mode = st.radio("モード", ["派遣を考える", "観測設計を比較する"], key="mode")
-    comparing = mode == "観測設計を比較する"
-    st.subheader(mode)
-    # Keep hidden widgets' selections when switching modes or introductory stages.
-    for key in ("stage", "count", "sigma", "strategy", "reveal_2", "reveal_3", "reveal_4", "reveal_5", "scenario", "cmp_target", "cmp_count", "cmp_strategy", "cmp_scenario", "cmp_sigma"):
-        if key in st.session_state:
-            st.session_state[key] = st.session_state[key]
-    if st.session_state.get("stage") not in (None, *STAGES):
-        st.session_state["stage"] = STAGES[0]
-    stage = None
-    if not comparing:
-        stage_label = st.radio("講義Stage", STAGES, horizontal=True, label_visibility="collapsed", key="stage")
-        stage = STAGES.index(stage_label)+1
-    observation_unlocked = comparing or stage >= 4
-    strategy_unlocked = comparing or stage >= 5
-    prompts = ["すべて見えるなら、ポンプ3台をどこへ？ 深い地点と守る価値の高い地点は同じ？",
-               "見えるのは3地点だけ。観測のない地区を、どう判断する？",
-               "観測のない場所は推定。滑らかな地図は、正しさを保証する？",
-               "配置の順番を固定してセンサを追加。推定を見て、派遣先を見直す？",
-               "同じ台数でも、都市全体を見るか、重要地区を見るか？"]
-    if not comparing:
-        st.info(prompts[stage-1])
+        scenario=st.selectbox("豪雨ケース",[0,1,2],format_func=lambda i:["基本：局地豪雨","病院周辺の雨が弱い","病院周辺の雨が強い"][i],key="new_scenario")
+    if st.session_state.get("case_id") != scenario:
+        for key in ("initial_plan","initial_prediction","review_plan","review_prediction","review_config","design_before"):
+            st.session_state.pop(key,None)
+        st.session_state["allocation"]=[]
+        st.session_state["flow"]=STEPS[0]
+        st.session_state["open_results"]=False
+        st.session_state["case_id"]=scenario
+    stage=st.radio("進行",STEPS,horizontal=True,key="flow",label_visibility="collapsed")
     with st.sidebar:
-        st.divider()
-        if comparing:
-            scenario,count,strategy,sigma=comparison_sidebar()
-        else:
-            st.subheader("観測できる情報")
-            count=st.slider("センサ数",3,30,12 if observation_unlocked else 3,key="count" if observation_unlocked else "count_intro",disabled=not observation_unlocked)
-            strategy=st.selectbox("配置戦略",STRATEGIES,key="strategy" if strategy_unlocked else "strategy_intro",disabled=not strategy_unlocked)
-            with st.expander("豪雨・観測精度の設定"):
-                scenario=st.selectbox("豪雨ケース",[0,1,2],format_func=lambda i:condition_label((i,0,"",0)).split(" / ")[0],key="scenario")
-                sigma=st.selectbox("観測ノイズ σ（m）",[0.,.03,.10,.20],index=1,key="sigma" if observation_unlocked else "sigma_intro",disabled=not observation_unlocked)
-            if not observation_unlocked:
-                count,sigma=3,.03
-                st.caption("Stage 1〜3：3台・均等カバー・σ = 0.03 m")
-            elif not strategy_unlocked:
-                st.caption("Stage 4：均等カバーで台数を比較")
-            if not strategy_unlocked:
-                strategy=STRATEGIES[0]
-        st.divider()
-        st.caption("ポンプ車：3台\n\n1台で1区画の水深を最大0.25 m低減")
-    city = make_city(scenario)
-    result = run_design(city,count,strategy,sigma)
-    conditions = (scenario, count, strategy, sigma)
-    st.session_state.setdefault("pumps", [])
-    st.session_state.setdefault("dispatch_source", {"kind": "manual"})
-    pumps = st.session_state["pumps"]
-    source = st.session_state["dispatch_source"]
-    if comparing:
-        show_before_after(conditions)
-        return
-    left, right = st.columns([3.2,1],gap="large")
+        st.caption("設置・排水が可能な８地区から３地区を選択")
+        count=st.slider("センサ数",3,30,3,key="new_count")
+        strategy=st.selectbox("配置戦略",STRATEGIES,key="new_strategy")
+        sigma=st.selectbox("センサ誤差 σ（m）",[0.,.03,.10,.20],index=1,key="new_sigma")
+        st.caption("条件変更後も手動の配分を保持。推定案の反映はボタンで実行。")
+    city=make_city(scenario); reports=make_reports(city)
+    sensors=sensor_order(city,strategy)[:count]; values=observe(city,sensors,sigma)
+    if stage==STEPS[0]:
+        source=SOURCES[1]
+        visible_reports=[r for r in reports if r.kind!="現地測定"]
+    else:
+        source=st.radio("推定に使う情報",SOURCES,index=2,horizontal=True,key="source_set")
+        visible_reports=[] if source==SOURCES[0] else [r for r in reports if r.kind!="現地測定" or source==SOURCES[2]]
+    used_sensors=sensors if source==SOURCES[2] else np.array([],dtype=int)
+    used_values=values if source==SOURCES[2] else np.array([])
+    prediction,coverage=estimate_sources(city.xy,city.prior,reports,sensors,values,sigma,source)
+    config=(scenario,count,strategy,sigma,source)
+    if stage==STEPS[0]:
+        st.info("通報・支援要請と地域の重要度を確認し、当初の配分を選択。未把握の地区も比較対象。")
+    else:
+        st.caption("青の濃さは推定水深。推定の確かさを表す色ではない。通報なしを水深ゼロとして扱わない。")
+    left,right=st.columns([1.6,1],gap="large")
     with right:
-        st.subheader("派遣・結果")
-        st.write(f"**派遣 {len(pumps)} / {PUMP_COUNT} 台**")
-        st.caption(" / ".join(cell_name(i) for i in pumps) or "派遣先は未選択")
-        if source["kind"] == "manual":
-            st.caption("自分で選択した派遣結果" if pumps else "未選択：地図をクリックして配置")
-        elif source["kind"] == "oracle":
-            st.caption("Oracleから自動派遣した配置")
-            st.caption("選択時：" + condition_label(source["conditions"]).split(" / ")[0])
-            if source["conditions"][0] != scenario:
-                st.caption("豪雨ケース変更前の配置を保持中")
+        st.subheader("支援候補地区への配分")
+        if stage!=STEPS[0] and st.button("推定に基づく配分案を反映"):
+            st.session_state["allocation"]=dispatch(prediction,city.weight).tolist()
+        pumps=st.multiselect("３地区を選択",list(CANDIDATES),format_func=lambda i:f"{cell_name(i)} {CANDIDATES[i]}",max_selections=3,key="allocation")
+        rows=[{"地区":f"{cell_name(i)} {name}","重要度":round(float(city.weight[i]),1),
+               **({"推定水深 m":round(float(prediction[i]),2),"推定軽減量":round(float(gains(prediction,city.weight)[i]),2)} if stage!=STEPS[0] else {})} for i,name in CANDIDATES.items()]
+        st.dataframe(rows,hide_index=True,width="stretch")
+        if stage==STEPS[0]:
+            if st.button("当初案を保存",disabled=len(pumps)!=3,type="primary"):
+                st.session_state["initial_plan"]=list(pumps)
+                st.session_state["initial_prediction"]=prediction.copy()
+                st.session_state.pop("review_plan",None)
+                st.success("当初案を保存")
         else:
-            st.caption("DT推定から自動派遣した配置")
-            st.caption("選択時：" + condition_label(source["conditions"]))
-            if tuple(source["conditions"]) != conditions:
-                st.caption("条件変更前の配置を保持中。再計算は下のボタンから。")
-        if stage >= 3:
-            st.caption("現在の観測条件：" + condition_label(conditions))
-        if stage==1 and st.button("Oracleの最適配置",key="oracle"):
-            st.session_state["pumps"] = dispatch(city.truth,city.weight).tolist()
-            st.session_state["dispatch_source"] = {"kind":"oracle", "conditions":conditions}
-            st.rerun()
-        if stage>=3 and st.button("DT推定から自動派遣",key="auto_dispatch"):
-            st.session_state["pumps"] = result["pumps"].tolist()
-            st.session_state["dispatch_source"] = {"kind":"dt", "conditions":conditions}
-            st.rerun()
-        if st.button("選択をクリア",key="clear"):
-            st.session_state["pumps"] = []
-            st.session_state["dispatch_source"] = {"kind":"manual"}
-            st.rerun()
-        if len(pumps)==PUMP_COUNT:
-            st.caption("地図で1台解除してから別の区画を選択")
-        revealed = stage == 1
-        if stage in (2,3,4,5):
-            revealed = st.toggle("結果を開示（教員・事後評価）",key=f"reveal_{stage}")
-        evaluation = evaluate(city,pumps)
-        if revealed:
-            st.metric("実現した被害削減",f"{evaluation['avoided']:.2f}")
-            st.metric("Oracleとの差 ↓",f"{evaluation['regret']:.2f}")
-            st.caption(f"対策なし {evaluation['baseline']:.2f} → 対策後 {evaluation['loss']:.2f} ｜ Oracle削減 {evaluation['oracle_avoided']:.2f}")
-            if stage>=3:
-                st.caption(f"全100地点の推定RMSE：{result['rmse']:.3f} m（事後の真値で評価）")
-                prior_result = evaluate(city, dispatch(city.prior, city.weight))
-                st.caption(f"観測なしの派遣と比べた追加削減：{evaluation['avoided'] - prior_result['avoided']:+.2f}（この豪雨での実現値）")
+            if st.button("見直し案を保存",disabled=len(pumps)!=3 or "initial_plan" not in st.session_state,type="primary"):
+                st.session_state["review_plan"]=list(pumps)
+                st.session_state["review_prediction"]=prediction.copy()
+                st.session_state["review_config"]=config
+                st.success("見直し案を保存")
+        if "initial_plan" in st.session_state:
+            st.caption("当初案："+" / ".join(CANDIDATES[i] for i in st.session_state["initial_plan"]))
         else:
-            st.caption("評価は非表示。派遣を考えてから「結果を開示」。")
+            st.caption("第１段階で３地区を選び、当初案を保存")
+    revealed=False
+    if stage in (STEPS[2],STEPS[3]):
+        revealed=st.toggle("実際の浸水状況と評価を開示",key="open_results")
     with left:
-        options=["真の浸水","重要度"] if stage==1 else (["観測のみ","重要度"] if stage==2 else ["DT推定","観測のみ","重要度"])
-        if revealed and stage!=1:
-            options.append("真の浸水（事後）")
-        view=st.radio("地図",options,horizontal=True,key=f"view_{stage}",label_visibility="collapsed")
-        field=city.truth if view.startswith("真") else result["prediction"] if view=="DT推定" else None
-        sensors=result["sensors"] if stage!=1 else np.array([],dtype=int)
-        values=result["values"] if stage!=1 else np.array([])
-        from pathlib import Path
-        import streamlit.components.v1 as components
-        grid = components.declare_component("urban_flood_grid",path=str(Path(__file__).parent/"flood_grid"))
-        ack = st.session_state.get("grid_event")
-        event = grid(**grid_payload(city,field,sensors,values,pumps,exposure=view=="重要度"),
-                     interactive=True,ack=ack,key="shared_grid",default=None)
-        if apply_grid_event(st.session_state,event):
-            st.rerun()
-        st.caption("橙枠：重要度6以上。重要度は市街地・病院周辺・住宅地に緩やかに分布。黄色の数値：観測、赤×：派遣。灰色は未観測。深さの色尺度は0–1 mで固定。")
-    st.caption("教育用の仮想モデル ｜ 各ポンプは担当1区画の水深を最大0.25 m低減。被害＝重要度 × max(水深 − 0.10 m, 0) の総和（相対指標）。")
-    with st.expander("モデル・比較の読み方"):
-        st.markdown("""**Reality → Observation → Estimation → Decision → Outcome**
-
-- 既知：地形・排水能力の基準値・重要度・予報に基づく事前推定。未知：実際の局地雨・排水偏差。
-- 観測残差を距離に応じて補間し、事前推定を補正。未観測＝水深ゼロではありません。
-- 自動派遣は推定上の被害削減が大きい3区画。評価には常に実際の浸水深を使います。
-- Oracleとの差＝真値で最適に派遣した削減量 − 実際の派遣の削減量。小さいほどよい判断です。
-- **Best Observation for State Estimation ≠ Best Observation for Decision Making**：ここで比べるのは3つの候補戦略です。センサ配置の大域的最適解を求めた結果ではありません。
-- **Accuracy ≠ Decision Value**：RMSEは全地区を等しく扱います。判断では地区の重要度と、ポンプによる削減可能量が効きます。
-- この1ケースの被害削減は事後の実現値です。期待Value of Informationや導入費用を含む純便益ではありません。複数事象での検証は次の学習課題です。
-- 水の移動、下水網、ポンプ移動時間、再浸水は省略。実際の防災計画には使用できません。""")
+        views=["通報・観測情報"] if stage==STEPS[0] else ["推定された浸水状況","通報・観測情報","情報の所在"]
+        if revealed: views.append("実際の浸水状況")
+        view=st.radio("地図表示",views,horizontal=True,key="map_"+str(STEPS.index(stage))+str(revealed),label_visibility="collapsed")
+        field=city.truth if view=="実際の浸水状況" else prediction if view=="推定された浸水状況" else None
+        st.plotly_chart(map_figure(city,field,visible_reports,used_sensors,used_values,pumps,coverage if view=="情報の所在" else None),width="stretch",key="map")
+        st.caption("枠：支援候補地区／赤枠：選択地区／茶色のひし形：通報・要請／茶色の四角：現地測定／黄色：センサ")
+        if view=="情報の所在":
+            st.caption("直接情報のある地点と、その近傍（1.8区画以内）を区別した表示。信頼確率や推定誤差の表示ではない。支援要請だけの地点は直接の水深情報に含めない。")
+    with st.expander("通報・現地報告の内容",expanded=stage==STEPS[0]):
+        st.dataframe(report_rows(visible_reports),hide_index=True,width="stretch")
+        st.caption("重複通報は一つの事象として推定に利用。支援要請の件数を水深や重要度に変換しない。")
+    if stage==STEPS[2]:
+        if all(k in st.session_state for k in ("initial_plan","review_plan")):
+            if revealed:
+                a=evaluate(city,st.session_state["initial_plan"]); b=evaluate(city,st.session_state["review_plan"])
+                c=st.columns(3)
+                c[0].metric("当初案の被害軽減",f"{a['avoided']:.2f}")
+                c[1].metric("見直し案の被害軽減",f"{b['avoided']:.2f}",f"{b['avoided']-a['avoided']:+.2f}")
+                err=float(np.sqrt(np.mean((st.session_state['review_prediction']-city.truth)**2)))
+                c[2].metric("保存した見直し時の推定RMSE",f"{err:.3f} m")
+                st.caption("保存時の推定条件：" + str(st.session_state["review_config"][1:]))
+                st.caption("同じ豪雨・候補地区・３台で評価。保存した案の比較（現在編集中の選択とは別）。見直し案："+" / ".join(CANDIDATES[i] for i in st.session_state["review_plan"]))
+                with st.expander("完全情報下の最良配分との比較"):
+                    st.write({"当初案との差":round(a['regret'],3),"見直し案との差":round(b['regret'],3)})
+        else: st.info("当初案と見直し案を保存すると比較が可能")
+    if stage==STEPS[3]:
+        st.subheader("観測設計の比較")
+        target=st.radio("変更する条件",["センサ数","配置戦略","センサ誤差"],horizontal=True)
+        signature=(scenario,source,target,*(v for j,v in enumerate((count,strategy,sigma)) if j!=["センサ数","配置戦略","センサ誤差"].index(target)))
+        if st.session_state.get("design_signature")!=signature:
+            st.session_state.pop("design_before",None)
+        st.session_state["design_signature"]=signature
+        if source!=SOURCES[2]: st.info("センサ条件の効果を見る場合は「通報＋センサ・現地測定」を選択")
+        if st.button("現在の観測設計を保存"):
+            st.session_state["design_before"]=(config,prediction.copy())
+        before=st.session_state.get("design_before")
+        if before:
+            rows=[]
+            for label,cfg,h in (("変更前",*before),("変更後",config,prediction)):
+                chosen=dispatch(h,city.weight)
+                row={"条件":label,"センサ数":cfg[1],"配置":cfg[2],"誤差σ":cfg[3],"推定からの配分案":" / ".join(CANDIDATES[i] for i in chosen)}
+                if revealed: row.update({"RMSE m":round(float(np.sqrt(np.mean((h-city.truth)**2))),3),"実際の被害軽減":round(evaluate(city,chosen)['avoided'],3)})
+                rows.append(row)
+            st.dataframe(rows,hide_index=True,width="stretch")
+            for col, label, cfg, h in zip(st.columns(2), ("変更前", "変更後"), (before[0], config), (before[1], prediction)):
+                with col:
+                    st.caption(label + "の推定と配分案")
+                    ss = sensor_order(city,cfg[2])[:cfg[1]] if cfg[4]==SOURCES[2] else np.array([],dtype=int)
+                    vv = observe(city,ss,cfg[3])
+                    rr = [] if cfg[4]==SOURCES[0] else [r for r in reports if r.kind!="現地測定" or cfg[4]==SOURCES[2]]
+                    st.plotly_chart(map_figure(city,h,rr,ss,vv,dispatch(h,city.weight)),width="stretch",key="compare_"+label)
+            st.caption("比較対象以外の条件を変えると保存を解除。通報・候補地区・豪雨は前後で共通。各条件の推定から自動で配分案を計算。")
+    with st.expander("モデルと情報の読み方"):
+        st.markdown("""- 冠水通報は「その場所で水がたまっている」という片側の条件として利用。検出の目安を0.02 mとする教育用の仮定であり、通報を特定の水深へ置換しない。既に事前推定がこの条件を満たす場合、補正が生じないこともある。
+- 数値のある現地測定は誤差0.06 m、センサは設定した誤差として利用。地形・排水の事前分布を空間的関係で補正。観測値と推定値の完全一致は保証しない。
+- 全情報は10:00を対象とする設定。到着までの予測・道路移動・水の流動は今回の計算対象外。
+- 各候補地区は代表１区画。１台で代表区画の水深を最大0.25 m低減。周辺全体への排水効果は計算しない。
+- 被害＝重要度 × max(水深−0.10 m, 0) の総和（相対指標）。重要度は人の価値の点数ではなく、施設・生活への影響を簡略化した設定。
+- 全域のRMSEと被害軽減は結果開示後だけ表示。真値は推定・候補地区選定には利用しない。通報・測定の生成と事後評価にのみ利用。
+- 教育用の仮想モデル。実際の災害対応の判断には使用しない。""")
 
 
 if __name__ == "__main__":
