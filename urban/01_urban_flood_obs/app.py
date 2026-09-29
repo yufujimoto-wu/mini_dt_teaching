@@ -175,7 +175,6 @@ def estimate_sources(xy, prior, reports, sensors, values, sigma, source):
     A small 0.02 m detection threshold is an explicit teaching assumption.
     Source coverage is descriptive, NOT a calibrated confidence probability.
     """
-    from scipy.optimize import minimize
     prior = np.asarray(prior, dtype=float)
     if source == SOURCES[0]:
         return prior.copy(), np.zeros(len(prior), dtype=int)
@@ -199,16 +198,38 @@ def estimate_sources(xy, prior, reports, sensors, values, sigma, source):
         score = .5*(z@z + residual@residual + below@below)
         grad = z + chol[ids].T@(residual/sd) + chol[q].T@(below/.06)
         return score, grad
-    fit = minimize(objective, np.zeros(len(prior)), jac=True, method="L-BFGS-B",
-                   options={"maxiter":1000,"ftol":1e-11,"gtol":1e-7})
-    if not fit.success:
-        raise RuntimeError("状態推定の収束を確認できませんでした: " + fit.message)
+    # Convex piecewise-quadratic objective: damped Newton with active
+    # one-sided reports. NumPy only, including the linear solve.
+    z = np.zeros(len(prior))
+    numeric_design = chol[ids] / sd[:, None]
+    base_hessian = np.eye(len(prior)) + numeric_design.T @ numeric_design
+    for _ in range(100):
+        score, grad = objective(z)
+        if np.linalg.norm(grad, ord=np.inf) < 1e-7:
+            break
+        active = q[(prior + chol @ z)[q] < .02]
+        qualitative_design = chol[active] / .06
+        hessian = base_hessian + qualitative_design.T @ qualitative_design
+        direction = np.linalg.solve(hessian, -grad)
+        slope = float(grad @ direction)
+        step = 1.0
+        for _ in range(50):
+            candidate = z + step * direction
+            candidate_score, _ = objective(candidate)
+            if candidate_score <= score + 1e-4 * step * slope + 1e-14:
+                z = candidate
+                break
+            step *= .5
+        else:
+            raise RuntimeError("状態推定の補正量を計算できませんでした")
+    else:
+        raise RuntimeError("状態推定の収束を確認できませんでした")
     direct = sorted(set(qualitative + ids.tolist()))
     coverage = np.zeros(len(prior), dtype=int)
     if direct:
         coverage[np.min(d2[:,direct],axis=1) <= 1.8**2] = 1
         coverage[direct] = 2
-    return np.maximum(0, prior+chol@fit.x), coverage
+    return np.maximum(0, prior+chol@z), coverage
 
 
 def map_figure(city, field, reports, sensors, values, pumps, coverage=None):
