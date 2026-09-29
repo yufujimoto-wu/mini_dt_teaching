@@ -650,10 +650,24 @@ else:
     st.caption("両計画を同じ実績条件で比較。灰色：朝7時以前の固定済みの実行結果。")
     metric=st.radio("実績情報",["エネルギー","CO₂原単位","電気料金"],horizontal=True)
     fig=make_subplots(rows=2,cols=1,shared_xaxes=True,vertical_spacing=0.15,
-        specs=[[{}],[{"secondary_y":True}]],subplot_titles=("実績条件", "充電電力とSOC：元の計画・更新後の計画"))
+        specs=[[{}],[{"secondary_y":True}]],subplot_titles=("実線：実績 ／ 薄い点線：前日予測 ／ 薄い破線：朝7時予測", "充電電力とSOC：元の計画・更新後の計画"))
     series = [("pv_act","PV実績","#e7a21b"),("load_act","家庭需要実績","#546e7a")] if metric=="エネルギー" else [("ci_act" if metric=="CO₂原単位" else "price_act",metric,"#546e7a")]
     for key,label,color in series:
-        fig.add_trace(go.Scatter(x=df.hour,y=df[key],name=label,line=dict(color=color,width=2)),row=1,col=1)
+        base = key.removesuffix("_act")
+        quantity = label.removesuffix("実績")
+        for suffix, forecast_label, dash, opacity in [
+            ("fc", "前日予測", "dot", 0.45),
+            ("upd", "朝7時予測", "dash", 0.65),
+        ]:
+            visible_hours = df.hour >= 7 if suffix == "upd" else df.hour >= 0
+            fig.add_trace(go.Scatter(
+                x=df.loc[visible_hours, "hour"], y=df.loc[visible_hours, f"{base}_{suffix}"],
+                name=f"{quantity}：{forecast_label}", showlegend=False,
+                line=dict(color=color, width=1.5, dash=dash), opacity=opacity,
+                hovertemplate=f"{quantity}：{forecast_label}<br>時刻 %{{x}}<br>%{{y:.3f}}<extra></extra>",
+            ), row=1, col=1)
+        # Draw actual values last so coincident forecasts do not obscure them.
+        fig.add_trace(go.Scatter(x=df.hour,y=df[key],name=f"{quantity}実績",line=dict(color=color,width=2.2)),row=1,col=1)
     for schedule,soc,label,color in [(original_schedule,original_soc,"元の計画","#3277b3"),(revised_schedule,revised_soc,"更新後","#269460")]:
         fig.add_trace(go.Bar(x=df.hour[:32]+0.5,y=schedule[:32],name=label+" 充電",marker_color=color),row=2,col=1)
         fig.add_trace(go.Scatter(x=np.arange(33),y=np.r_[INITIAL_SOC,soc[:32]],name=label+" SOC",line=dict(color=color,dash="dot" if label=="元の計画" else "solid")),row=2,col=1,secondary_y=True)
