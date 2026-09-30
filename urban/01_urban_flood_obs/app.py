@@ -138,7 +138,6 @@ def cell_name(i):
 CANDIDATES = {12:"北西住宅", 18:"病院東側", 27:"病院南側", 44:"中心市街地",
               55:"駅前", 62:"西部住宅", 73:"避難所周辺", 87:"南東住宅"}
 SOURCES = ("事前情報のみ", "通報を追加", "通報＋センサ・現地測定")
-STEPS = ("1. 支援要請から考える", "2. 推定を使って考える", "3. 実際の結果を確認", "4. 観測条件を変える")
 
 @dataclass(frozen=True)
 class Report:
@@ -287,6 +286,7 @@ def grid_data(city, prediction, coverage, reports, sensors, values, pumps, view)
     upper=12 if view==VIEWS[2] else 1
     colors=sample_colorscale(palette,np.clip(shown/upper,0,1).tolist()) if shown is not None else ["#e5e7eb"]*100
     if view==VIEWS[3]: colors=[("#e5e7eb","#bfdbfe","#2563eb")[int(v)] for v in coverage]
+    if view==VIEWS[0]: colors=["#93c5fd" if i in by_cell or i in numeric else "#f1f5f9" for i in range(100)]
     cells=[]
     for i in range(100):
         rr=by_cell.get(i,[])
@@ -295,14 +295,14 @@ def grid_data(city, prediction, coverage, reports, sensors, values, pumps, view)
         if shown is not None and view!=VIEWS[2]: detail+=f" ｜ {view} {shown[i]:.2f} m"
         if view==VIEWS[3]: detail+=" ｜ "+("主に事前情報","周辺に直接情報","直接情報あり")[int(coverage[i])]
         if i in numeric: detail+=f" ｜ センサ {numeric[i]} m"
-        detail+="".join(" ｜ "+r.text for r in rr)
+        detail+="".join(f" ｜ {r.kind} {r.count}件（{r.time}）：{r.text}" for r in rr)
         cells.append(dict(name=cell_name(i),district=name,color=colors[i],candidate=i in CANDIDATES,
                           selected=i in pumps,observed=numeric.get(i),
                           report=any(r.kind!="現地測定" for r in rr),measured=any(r.kind=="現地測定" for r in rr),description=detail))
     ramp=sample_colorscale(palette,[0,.25,.5,.75,1])
     return dict(cells=cells,legend="重要度 0–12" if view==VIEWS[2] else "浸水深 0–1 m",
                 ramp="linear-gradient(to right,"+",".join(ramp)+")",coverage=view==VIEWS[3],
-                showScale=shown is not None)
+                showScale=shown is not None, observation=view==VIEWS[0])
 
 
 GRID_HTML = r"""<!doctype html><html lang="ja"><head><meta charset="utf-8"><style>
@@ -313,16 +313,12 @@ GRID_HTML = r"""<!doctype html><html lang="ja"><head><meta charset="utf-8"><styl
 .cell.candidate{border:2px solid #334155;cursor:pointer}.cell.selected{border:3px solid #be123c;box-shadow:inset 0 0 0 1px white}
 .cell:focus-visible{outline:3px solid #2563eb;z-index:1}.cell.candidate:hover{filter:brightness(.92)}
 .district{display:block;font-size:clamp(8px,1.7vw,11px);font-weight:700;background:#ffffffe0;line-height:1.2;border-radius:2px}
-.markers{display:flex;gap:2px;align-items:center;justify-content:center;margin-top:2px}
-.sensor{font-size:10px;background:#fde68a;color:#713f12;border-radius:2px;padding:0 2px}
-.report{display:inline-block;width:8px;height:8px;background:#9a3412;transform:rotate(45deg)}
-.measured{display:inline-block;width:8px;height:8px;background:#9a3412}
 .legend{display:flex;gap:12px;align-items:center;flex-wrap:wrap;font-size:11px;margin-top:7px}.item{display:inline-flex;align-items:center;gap:5px}
 .box{width:13px;height:13px;border:2px solid #334155;display:inline-block}.chosen{border-color:#be123c;border-width:3px}
 #scale{margin-top:7px;font-size:11px;display:flex;align-items:center;gap:7px}.ramp{width:125px;height:10px}
-#hint{height:36px;font-size:11px;line-height:1.5;overflow:hidden;margin-top:5px;color:#64748b}
+#hint{min-height:36px;font-size:11px;line-height:1.5;margin-top:5px;color:#64748b}
 </style></head><body><div class="wrap"><div id="grid"></div>
-<div class="legend"><span class="item"><i class="box"></i>配分候補</span><span class="item"><i class="box chosen"></i>選択中</span><span class="item"><i class="report"></i>通報・要請</span><span class="item"><i class="measured"></i>現地測定</span><span class="item"><b class="sensor">0.20</b>センサ（m）</span></div>
+<div class="legend"><span class="item"><i class="box"></i>配分候補</span><span class="item"><i class="box chosen"></i>選択中</span><span class="item" id="observation-legend"><i class="box" style="background:#93c5fd;border:none"></i>通報・要請・観測あり</span></div>
 <div id="scale"></div><div id="hint"></div></div><script>
 let args,pending=null;
 const send=(type,data={})=>parent.postMessage({isStreamlitMessage:true,type,...data},'*');
@@ -335,13 +331,11 @@ function render(){
   if(i%10===0)axis(String.fromCharCode(65+Math.floor(i/10)));
   let e=document.createElement(c.candidate?'button':'div');e.className='cell'+(c.candidate?' candidate':'')+(c.selected?' selected':'');e.style.background=c.color;e.dataset.cell=i;e.title=c.description;
   if(c.candidate){e.type='button';e.disabled=pending!==null;e.setAttribute('aria-pressed',String(c.selected));e.setAttribute('aria-label',c.name+' '+c.district);let t=document.createElement('span');t.className='district';t.textContent=c.district;e.append(t)}
-  let markers=document.createElement('div');markers.className='markers';
-  for(let [yes,cl] of [[c.report,'report'],[c.measured,'measured']])if(yes){let m=document.createElement('span');m.className=cl;markers.append(m)}
-  if(c.observed!==null){let m=document.createElement('span');m.className='sensor';m.textContent=c.observed;markers.append(m)}
-  e.append(markers);e.onmouseenter=e.onfocus=()=>document.getElementById('hint').textContent=c.description;
+  e.onmouseenter=e.onfocus=()=>document.getElementById('hint').textContent=c.description;
   if(c.candidate)e.onclick=()=>{if(pending!==null)return;pending=crypto.randomUUID();send('streamlit:setComponentValue',{value:{cell:i,token:pending,scene:args.scene},dataType:'json'});grid.querySelectorAll('button').forEach(b=>b.disabled=true)};
   grid.append(e);
  });
+ document.getElementById('observation-legend').style.display=args.observation?'inline-flex':'none';
  const scale=document.getElementById('scale');scale.replaceChildren();
  if(args.coverage){for(let [color,label] of [['#e5e7eb','主に事前情報'],['#bfdbfe','周辺に直接情報'],['#2563eb','直接情報あり']]){let t=document.createElement('span');t.className='item';let c=document.createElement('i');c.className='box';c.style.background=color;c.style.border='none';t.append(c,document.createTextNode(label));scale.append(t)}}
  else if(args.showScale){let t=document.createElement('span');t.textContent=args.legend;let r=document.createElement('span');r.className='ramp';r.style.background=args.ramp;scale.append(t,r)}
@@ -383,13 +377,7 @@ def main():
         sigma=st.selectbox("センサ誤差 σ（m）",[0.,.03,.10,.20],index=1,key="ui_sigma")
     if st.session_state.get("ui_case")!=scenario:
         st.session_state.update(ui_case=scenario,picked=[],selection_note="")
-    context=st.radio("デモの文脈",STEPS,horizontal=True,key="ui_context",label_visibility="collapsed")
-    if st.session_state.get("last_context")!=context:
-        st.session_state["ui_view"]=VIEWS[0] if context==STEPS[0] else VIEWS[4] if context==STEPS[2] else VIEWS[1]
-        st.session_state["ui_basis"]="実際の条件（参照）" if context==STEPS[2] else "推定に基づく評価"
-        st.session_state["ui_source"]=SOURCES[1] if context==STEPS[0] else SOURCES[2]
-        st.session_state["last_context"]=context
-    source=st.sidebar.radio("推定に使う情報",SOURCES,key="ui_source")
+    source=st.sidebar.radio("推定に使う情報",SOURCES,index=2,key="ui_source")
     city=make_city(scenario);reports=make_reports(city)
     sensors=sensor_order(city,strategy)[:count];values=observe(city,sensors,sigma)
     prediction,coverage=estimate_sources(city.xy,city.prior,reports,sensors,values,sigma,source)
