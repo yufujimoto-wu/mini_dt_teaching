@@ -312,13 +312,13 @@ GRID_HTML = r"""<!doctype html><html lang="ja"><head><meta charset="utf-8"><styl
 .cell{position:relative;aspect-ratio:1;border:1px solid #dbe2e8;background:#eee;border-radius:3px;padding:1px;min-width:0;color:#172a41;overflow:hidden}
 .cell.candidate{border:2px solid #334155;cursor:pointer}.cell.selected{border:3px solid #be123c;box-shadow:inset 0 0 0 1px white}
 .cell:focus-visible{outline:3px solid #2563eb;z-index:1}.cell.candidate:hover{filter:brightness(.92)}
-.district{display:block;font-size:clamp(8px,1.7vw,11px);font-weight:700;background:#ffffffe0;line-height:1.2;border-radius:2px}
+.district{display:block;font-size:clamp(8px,1.7vw,11px);font-weight:700;background:rgba(255,255,255,.35);line-height:1.2;border-radius:2px}
 .legend{display:flex;gap:12px;align-items:center;flex-wrap:wrap;font-size:11px;margin-top:7px}.item{display:inline-flex;align-items:center;gap:5px}
 .box{width:13px;height:13px;border:2px solid #334155;display:inline-block}.chosen{border-color:#be123c;border-width:3px}
 #scale{margin-top:7px;font-size:11px;display:flex;align-items:center;gap:7px}.ramp{width:125px;height:10px}
 #hint{min-height:36px;font-size:11px;line-height:1.5;margin-top:5px;color:#64748b}
 </style></head><body><div class="wrap"><div id="grid"></div>
-<div class="legend"><span class="item"><i class="box"></i>配分候補</span><span class="item"><i class="box chosen"></i>選択中</span><span class="item" id="observation-legend"><i class="box" style="background:#93c5fd;border:none"></i>通報・要請・観測あり</span></div>
+<div class="legend"><span class="item"><i class="box"></i>配分候補</span><span class="item"><i class="box chosen"></i>選択中</span></div><div class="legend" id="observation-legend"><span class="item"><i class="box" style="background:#f6c66a;border:none"></i>通報・要請</span><span class="item"><i class="box" style="background:#7eb9ed;border:none"></i>センサ</span><span class="item"><i class="box" style="background:#90cfb1;border:none"></i>現地測定</span><span class="item"><i class="box" style="background:linear-gradient(90deg,#f6c66a 50%,#7eb9ed 50%);border:none"></i>併存</span></div>
 <div id="scale"></div><div id="hint"></div></div><script>
 let args,pending=null;
 const send=(type,data={})=>parent.postMessage({isStreamlitMessage:true,type,...data},'*');
@@ -330,12 +330,16 @@ function render(){
  args.cells.forEach((c,i)=>{
   if(i%10===0)axis(String.fromCharCode(65+Math.floor(i/10)));
   let e=document.createElement(c.candidate?'button':'div');e.className='cell'+(c.candidate?' candidate':'')+(c.selected?' selected':'');e.style.background=c.color;e.dataset.cell=i;e.title=c.description;
+  if(args.observation){
+   const bands=[];if(c.report)bands.push('#f6c66a');if(c.observed!==null)bands.push('#7eb9ed');if(c.measured)bands.push('#90cfb1');
+   e.style.background=bands.length>1?'linear-gradient(90deg,'+bands.map((color,j)=>color+' '+(100*j/bands.length)+'% '+(100*(j+1)/bands.length)+'%').join(',')+')':bands[0]||'#f1f5f9';
+  }
   if(c.candidate){e.type='button';e.disabled=pending!==null;e.setAttribute('aria-pressed',String(c.selected));e.setAttribute('aria-label',c.name+' '+c.district);let t=document.createElement('span');t.className='district';t.textContent=c.district;e.append(t)}
   e.onmouseenter=e.onfocus=()=>document.getElementById('hint').textContent=c.description;
   if(c.candidate)e.onclick=()=>{if(pending!==null)return;pending=crypto.randomUUID();send('streamlit:setComponentValue',{value:{cell:i,token:pending,scene:args.scene},dataType:'json'});grid.querySelectorAll('button').forEach(b=>b.disabled=true)};
   grid.append(e);
  });
- document.getElementById('observation-legend').style.display=args.observation?'inline-flex':'none';
+ document.getElementById('observation-legend').style.display=args.observation?'flex':'none';
  const scale=document.getElementById('scale');scale.replaceChildren();
  if(args.coverage){for(let [color,label] of [['#e5e7eb','主に事前情報'],['#bfdbfe','周辺に直接情報'],['#2563eb','直接情報あり']]){let t=document.createElement('span');t.className='item';let c=document.createElement('i');c.className='box';c.style.background=color;c.style.border='none';t.append(c,document.createTextNode(label));scale.append(t)}}
  else if(args.showScale){let t=document.createElement('span');t.textContent=args.legend;let r=document.createElement('span');r.className='ramp';r.style.background=args.ramp;scale.append(t,r)}
