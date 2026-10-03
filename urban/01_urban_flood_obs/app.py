@@ -122,7 +122,7 @@ def evaluate(city, pumps):
 def run_design(city, count, strategy, sigma):
     sensors = sensor_order(city, strategy)[:count]
     values = observe(city, sensors, sigma)
-    prediction, _ = estimate_sources(city.xy, city.prior, make_reports(city), sensors, values, sigma, "通報＋センサ・現地測定")
+    prediction, _ = estimate_sources(city.xy, city.prior, make_reports(city), sensors, values, sigma, "センサ＋通報")
     pumps = dispatch(prediction, city.weight)
     result = evaluate(city, pumps)
     result.update(sensors=sensors, values=values, prediction=prediction, pumps=pumps,
@@ -137,7 +137,7 @@ def cell_name(i):
 # Fixed feasible districts, independent of the hidden flood realization.
 CANDIDATES = {12:"北西住宅", 18:"病院東側", 27:"病院南側", 44:"中心市街地",
               55:"駅前", 62:"西部住宅", 73:"避難所周辺", 87:"南東住宅"}
-SOURCES = ("事前情報のみ", "通報を追加", "通報＋センサ・現地測定")
+SOURCES = ("事前情報のみ", "センサ情報を追加", "センサ＋通報")
 
 @dataclass(frozen=True)
 class Report:
@@ -151,20 +151,13 @@ class Report:
 
 
 def make_reports(city):
-    """Synthetic evidence generated once; inference receives reports, never truth.
-
-    Duplicate calls are displayed but a shared incident contributes only once.
-    Numeric field measurement noise is separate from fixed sensor noise.
-    """
-    reports = [Report(55, "冠水の通報", "駅前の道路が冠水。水深・範囲は未確認", count=4),
-               Report(18, "冠水の通報", "病院東側の出入口前で冠水。場所・時刻の分かる写真あり"),
-               Report(62, "冠水の通報", "住宅地の交差点で冠水。周辺への広がりは未確認", count=2),
-               Report(73, "支援要請", "避難所周辺の排水支援要請。水深の記載なし"),
-               Report(44, "支援要請", "中心市街地から排水支援要請。水深の記載なし")]
-    for cell, error in ((27, .025), (62, -.035)):
-        value = round(max(0., float(city.truth[cell]) + error), 2)
-        reports.append(Report(cell, "現地測定", f"担当者による水深測定：約{value:.2f} m", value, .06))
-    return reports
+    """Synthetic reports; duplicate calls describe one event, not independent evidence."""
+    reported_depth = round(max(0., float(city.truth[18]) + .035), 1)
+    return [Report(55, "冠水の通報", "駅前の道路が冠水。水深・範囲は未確認", count=4),
+            Report(18, "水深の通報", f"病院東側の出入口前で約{reported_depth:.1f} mの冠水との通報。目測のため誤差を含む", value=reported_depth, sigma=.08),
+            Report(62, "冠水の通報", "住宅地の交差点で冠水。周辺への広がりは未確認", count=2),
+            Report(73, "支援要請", "避難所周辺の排水支援要請。水深の記載なし"),
+            Report(44, "支援要請", "中心市街地から排水支援要請。水深の記載なし")]
 
 
 def estimate_sources(xy, prior, reports, sensors, values, sigma, source):
@@ -177,11 +170,10 @@ def estimate_sources(xy, prior, reports, sensors, values, sigma, source):
     prior = np.asarray(prior, dtype=float)
     if source == SOURCES[0]:
         return prior.copy(), np.zeros(len(prior), dtype=int)
-    numeric = []
-    qualitative = sorted({r.cell for r in reports if r.kind == "冠水の通報"})
+    numeric = [(int(i), float(v), max(float(sigma), .005)) for i,v in zip(sensors, values)]
+    qualitative = sorted({r.cell for r in reports if r.kind == "冠水の通報"}) if source == SOURCES[2] else []
     if source == SOURCES[2]:
-        numeric += [(r.cell, r.value, r.sigma) for r in reports if r.kind == "現地測定"]
-        numeric += [(int(i), float(v), max(float(sigma), .005)) for i,v in zip(sensors, values)]
+        numeric += [(r.cell, r.value, r.sigma) for r in reports if r.value is not None]
     d2 = np.sum((xy[:,None]-xy[None,:])**2, axis=2)
     covariance = .18**2 * np.exp(-d2/(2*1.8**2)) + np.eye(len(prior))*1e-6
     chol = np.linalg.cholesky(covariance)
@@ -232,7 +224,7 @@ def estimate_sources(xy, prior, reports, sensors, values, sigma, source):
 
 
 
-VIEWS = ("通報・観測", "推定浸水深", "重要度", "情報の所在", "実際の浸水深（参照）")
+VIEWS = ("重要度", "観測・通報による浸水情報", "推定された浸水深", "実際の浸水深（参照）")
 
 
 def allocation_event(state, event):
@@ -278,31 +270,37 @@ def outcome(depth, weight, pumps):
 
 def grid_data(city, prediction, coverage, reports, sensors, values, pumps, view):
     from plotly.colors import sample_colorscale
-    numeric={int(i):f"{v:.2f}" for i,v in zip(sensors,values)}
+    numeric={int(i):float(v) for i,v in zip(sensors,values)}
     by_cell={}
     for r in reports: by_cell.setdefault(r.cell,[]).append(r)
-    shown=city.truth if view==VIEWS[4] else prediction if view==VIEWS[1] else city.weight if view==VIEWS[2] else None
-    palette="YlOrBr" if view==VIEWS[2] else "Blues"
-    upper=12 if view==VIEWS[2] else 1
+    shown=city.weight if view==VIEWS[0] else prediction if view==VIEWS[2] else city.truth if view==VIEWS[3] else None
+    palette="YlOrBr" if view==VIEWS[0] else "Blues"
+    upper=12 if view==VIEWS[0] else 1
     colors=sample_colorscale(palette,np.clip(shown/upper,0,1).tolist()) if shown is not None else ["#e5e7eb"]*100
-    if view==VIEWS[3]: colors=[("#e5e7eb","#bfdbfe","#2563eb")[int(v)] for v in coverage]
-    if view==VIEWS[0]: colors=["#93c5fd" if i in by_cell or i in numeric else "#f1f5f9" for i in range(100)]
     cells=[]
     for i in range(100):
         rr=by_cell.get(i,[])
         name=CANDIDATES.get(i,"")
         detail=f"{cell_name(i)} {name} ｜ 重要度 {city.weight[i]:.1f}"
-        if shown is not None and view!=VIEWS[2]: detail+=f" ｜ {view} {shown[i]:.2f} m"
-        if view==VIEWS[3]: detail+=" ｜ "+("主に事前情報","周辺に直接情報","直接情報あり")[int(coverage[i])]
-        if i in numeric: detail+=f" ｜ センサ {numeric[i]} m"
+        if shown is not None and view!=VIEWS[0]: detail+=f" ｜ {view} {shown[i]:.2f} m"
+        if i in numeric: detail+=f" ｜ センサ {numeric[i]:.2f} m（10:00）"
         detail+="".join(f" ｜ {r.kind} {r.count}件（{r.time}）：{r.text}" for r in rr)
+        label=""
+        if view==VIEWS[1]:
+            report_value=next((r.value for r in rr if r.value is not None),None)
+            value=numeric.get(i,report_value)
+            if value is not None:
+                colors[i]=sample_colorscale("Blues",[float(np.clip(value,0,1))])[0]
+                label=f"{value:.2f}" if i in numeric else f"約{value:.1f}"
+            elif any(r.kind=="冠水の通報" for r in rr):
+                colors[i]="repeating-linear-gradient(135deg,#dbeafe 0px,#dbeafe 4px,#7da5c7 4px,#7da5c7 6px)"
+            else:
+                detail+=" ｜ 浸水深の情報なし"
         cells.append(dict(name=cell_name(i),district=name,color=colors[i],candidate=i in CANDIDATES,
-                          selected=i in pumps,observed=numeric.get(i),
-                          report=any(r.kind!="現地測定" for r in rr),measured=any(r.kind=="現地測定" for r in rr),description=detail))
+                          selected=i in pumps,sensor=i in numeric,report=bool(rr),label=label,description=detail))
     ramp=sample_colorscale(palette,[0,.25,.5,.75,1])
-    return dict(cells=cells,legend="重要度 0–12" if view==VIEWS[2] else "浸水深 0–1 m",
-                ramp="linear-gradient(to right,"+",".join(ramp)+")",coverage=view==VIEWS[3],
-                showScale=shown is not None, observation=view==VIEWS[0])
+    return dict(cells=cells,legend="重要度 0–12" if view==VIEWS[0] else "浸水深 0–1 m",
+                ramp="linear-gradient(to right,"+",".join(ramp)+")",observation=view==VIEWS[1])
 
 
 GRID_HTML = r"""<!doctype html><html lang="ja"><head><meta charset="utf-8"><style>
@@ -310,15 +308,20 @@ GRID_HTML = r"""<!doctype html><html lang="ja"><head><meta charset="utf-8"><styl
 .wrap{max-width:390px;margin:auto}#grid{display:grid;grid-template-columns:19px repeat(10,minmax(0,1fr));gap:2px}
 .axis{display:flex;align-items:center;justify-content:center;color:#64748b;font-size:11px}
 .cell{position:relative;aspect-ratio:1;border:1px solid #dbe2e8;background:#eee;border-radius:3px;padding:1px;min-width:0;color:#172a41;overflow:hidden}
-.cell.candidate{border:2px solid #334155;cursor:pointer}.cell.selected{border:3px solid #be123c;box-shadow:inset 0 0 0 1px white}
+.cell.candidate{cursor:pointer}
+.cell.has-report{box-shadow:inset 0 0 0 3px #888}
+.cell.has-sensor:before{content:"";position:absolute;inset:0;border:1px solid #111;pointer-events:none;z-index:2}
+.cell.selected:after{content:"";position:absolute;inset:4px;border:2px solid #be123c;pointer-events:none;z-index:3}
+.depth{display:block;font-size:9px;font-weight:700;line-height:1.05;background:rgba(255,255,255,.35)}
 .cell:focus-visible{outline:3px solid #2563eb;z-index:1}.cell.candidate:hover{filter:brightness(.92)}
 .district{display:block;font-size:clamp(8px,1.7vw,11px);font-weight:700;background:rgba(255,255,255,.35);line-height:1.2;border-radius:2px}
 .legend{display:flex;gap:12px;align-items:center;flex-wrap:wrap;font-size:11px;margin-top:7px}.item{display:inline-flex;align-items:center;gap:5px}
-.box{width:13px;height:13px;border:2px solid #334155;display:inline-block}.chosen{border-color:#be123c;border-width:3px}
+.box{width:13px;height:13px;border:1px solid #111;display:inline-block}.chosen{border:2px solid #be123c}.reported{border:3px solid #888}
 #scale{margin-top:7px;font-size:11px;display:flex;align-items:center;gap:7px}.ramp{width:125px;height:10px}
 #hint{min-height:36px;font-size:11px;line-height:1.5;margin-top:5px;color:#64748b}
 </style></head><body><div class="wrap"><div id="grid"></div>
-<div class="legend"><span class="item"><i class="box"></i>配分候補</span><span class="item"><i class="box chosen"></i>選択中</span></div><div class="legend" id="observation-legend"><span class="item"><i class="box" style="background:#f6c66a;border:none"></i>通報・要請</span><span class="item"><i class="box" style="background:#7eb9ed;border:none"></i>センサ</span><span class="item"><i class="box" style="background:#90cfb1;border:none"></i>現地測定</span><span class="item"><i class="box" style="background:linear-gradient(90deg,#f6c66a 50%,#7eb9ed 50%);border:none"></i>併存</span></div>
+<div class="legend"><span class="item"><i class="box"></i>センサ</span><span class="item"><i class="box reported"></i>通報・要請</span><span class="item"><i class="box chosen"></i>派遣先</span></div>
+<div class="legend" id="observation-legend"><span class="item"><i class="box" style="border:none;background:#e5e7eb"></i>水深の情報なし</span><span class="item"><i class="box" style="border:none;background:repeating-linear-gradient(135deg,#dbeafe 0px,#dbeafe 4px,#7da5c7 4px,#7da5c7 6px)"></i>冠水のみ判明</span><span>数値：m ／ 約：通報による目測</span></div>
 <div id="scale"></div><div id="hint"></div></div><script>
 let args,pending=null;
 const send=(type,data={})=>parent.postMessage({isStreamlitMessage:true,type,...data},'*');
@@ -329,21 +332,17 @@ function render(){
  axis('');for(let i=1;i<=10;i++)axis(i);
  args.cells.forEach((c,i)=>{
   if(i%10===0)axis(String.fromCharCode(65+Math.floor(i/10)));
-  let e=document.createElement(c.candidate?'button':'div');e.className='cell'+(c.candidate?' candidate':'')+(c.selected?' selected':'');e.style.background=c.color;e.dataset.cell=i;e.title=c.description;
-  if(args.observation){
-   const bands=[];if(c.report)bands.push('#f6c66a');if(c.observed!==null)bands.push('#7eb9ed');if(c.measured)bands.push('#90cfb1');
-   e.style.background=bands.length>1?'linear-gradient(90deg,'+bands.map((color,j)=>color+' '+(100*j/bands.length)+'% '+(100*(j+1)/bands.length)+'%').join(',')+')':bands[0]||'#f1f5f9';
-  }
+  let e=document.createElement(c.candidate?'button':'div');e.className='cell'+(c.candidate?' candidate':'')+(c.selected?' selected':'')+(c.sensor?' has-sensor':'')+(c.report?' has-report':'');e.style.background=c.color;e.dataset.cell=i;e.title=c.description;
   if(c.candidate){e.type='button';e.disabled=pending!==null;e.setAttribute('aria-pressed',String(c.selected));e.setAttribute('aria-label',c.name+' '+c.district);let t=document.createElement('span');t.className='district';t.textContent=c.district;e.append(t)}
+  if(c.label){let t=document.createElement('span');t.className='depth';t.textContent=c.label;e.append(t)}
   e.onmouseenter=e.onfocus=()=>document.getElementById('hint').textContent=c.description;
   if(c.candidate)e.onclick=()=>{if(pending!==null)return;pending=crypto.randomUUID();send('streamlit:setComponentValue',{value:{cell:i,token:pending,scene:args.scene},dataType:'json'});grid.querySelectorAll('button').forEach(b=>b.disabled=true)};
   grid.append(e);
  });
  document.getElementById('observation-legend').style.display=args.observation?'flex':'none';
  const scale=document.getElementById('scale');scale.replaceChildren();
- if(args.coverage){for(let [color,label] of [['#e5e7eb','主に事前情報'],['#bfdbfe','周辺に直接情報'],['#2563eb','直接情報あり']]){let t=document.createElement('span');t.className='item';let c=document.createElement('i');c.className='box';c.style.background=color;c.style.border='none';t.append(c,document.createTextNode(label));scale.append(t)}}
- else if(args.showScale){let t=document.createElement('span');t.textContent=args.legend;let r=document.createElement('span');r.className='ramp';r.style.background=args.ramp;scale.append(t,r)}
- document.getElementById('hint').textContent='候補地区をクリックして選択・解除（最大３地区）。各地点にカーソルを置くと詳細を表示。';
+ let t=document.createElement('span');t.textContent=args.legend;let r=document.createElement('span');r.className='ramp';r.style.background=args.ramp;scale.append(t,r);
+ document.getElementById('hint').textContent='地区名のあるマスをクリックして選択・解除（最大３地区）。各地点にカーソルを置くと詳細を表示。';
  if(focus!==undefined)grid.querySelector('button[data-cell="'+focus+'"]')?.focus({preventScroll:true});resize();
 }
 window.addEventListener('message',e=>{if(e.source!==parent||e.data.type!=='streamlit:render')return;args=e.data.args;if(args.ack===pending)pending=null;render()});
@@ -365,33 +364,38 @@ def clickable_grid(**kwargs):
 
 def main():
     import streamlit as st
+    # Keep the evaluation selection when a map click reruns before the KPI widgets.
+    if "ui_basis" in st.session_state:
+        st.session_state["ui_basis"]=st.session_state["ui_basis"]
     st.set_page_config(page_title="Mini Urban Flood Digital Twin",layout="wide")
     st.markdown("""<style>.block-container{padding-top:3rem;padding-bottom:.4rem;padding-left:1rem;padding-right:1rem;max-width:1450px}
     h1{font-size:1.65rem!important;margin-bottom:.1rem!important}h3{font-size:1.1rem!important}
     [data-testid=stVerticalBlock]{gap:.4rem}[data-testid=stMetricValue]{font-size:1.45rem}
     [data-testid=stMetricLabel]{font-size:.8rem}
-    .reference{color:#7b8491;font-size:.8rem}
+    .reference{color:#7b8491;font-size:.8rem;line-height:1.5;padding-bottom:8px}
     .st-key-ui_view [role="radiogroup"] label:last-child p,.st-key-ui_basis [role="radiogroup"] label:last-child p{color:#7b8491}
     </style>""",unsafe_allow_html=True)
     st.title("Mini Urban Flood Digital Twin")
     with st.sidebar:
         scenario=st.selectbox("豪雨ケース",[0,1,2],format_func=lambda i:["基本：局地豪雨","病院周辺の雨が弱い","病院周辺の雨が強い"][i],key="ui_weather")
-        count=st.slider("センサ数",3,30,3,key="ui_count")
-        strategy=st.selectbox("配置戦略",STRATEGIES,key="ui_strategy")
-        sigma=st.selectbox("センサ誤差 σ（m）",[0.,.03,.10,.20],index=1,key="ui_sigma")
+        source=st.radio("利用する情報",SOURCES,index=0,key="ui_source")
+        count=st.slider("センサ数",3,30,3,key="ui_count",disabled=source==SOURCES[0])
+        strategy=st.selectbox("配置戦略",STRATEGIES,key="ui_strategy",disabled=source==SOURCES[0])
+        sigma=st.selectbox("センサ誤差 σ（m）",[0.,.03,.10,.20],index=1,key="ui_sigma",disabled=source==SOURCES[0])
     if st.session_state.get("ui_case")!=scenario:
         st.session_state.update(ui_case=scenario,picked=[],selection_note="")
-    source=st.sidebar.radio("推定に使う情報",SOURCES,index=2,key="ui_source")
+    if source==SOURCES[0]: st.sidebar.caption("センサ・通報は未使用。重要度から配分を検討。")
     city=make_city(scenario);reports=make_reports(city)
     sensors=sensor_order(city,strategy)[:count];values=observe(city,sensors,sigma)
     prediction,coverage=estimate_sources(city.xy,city.prior,reports,sensors,values,sigma,source)
-    rr=[] if source==SOURCES[0] else [r for r in reports if r.kind!="現地測定" or source==SOURCES[2]]
-    ss=sensors if source==SOURCES[2] else np.array([],dtype=int)
-    vv=values if source==SOURCES[2] else np.array([])
+    rr=reports if source==SOURCES[2] else []
+    ss=sensors if source!=SOURCES[0] else np.array([],dtype=int)
+    vv=values if source!=SOURCES[0] else np.array([])
     left,right=st.columns([1.25,1],gap="large")
     with left:
         view=st.radio("地図",VIEWS,horizontal=True,key="ui_view",label_visibility="collapsed")
-        if view==VIEWS[4]: st.markdown('<div class="reference">参照用の真値：実運用では都市全体を直接把握できない情報</div>',unsafe_allow_html=True)
+        if view==VIEWS[3]: st.markdown('<div class="reference">参照用の真値：実運用では都市全体を直接把握できない情報</div>',unsafe_allow_html=True)
+        if view==VIEWS[2] and source==SOURCES[0]: st.caption("地形・排水条件に基づく事前推定（観測・通報による補正なし）")
         event=clickable_grid(**grid_data(city,prediction,coverage,rr,ss,vv,st.session_state["picked"],view),
                              ack=st.session_state.get("click_ack"),scene=scenario,key="allocation_grid",default=None)
         if allocation_event(st.session_state,event): st.rerun()
@@ -401,27 +405,29 @@ def main():
         st.write(" ／ ".join(CANDIDATES[i] for i in pumps) or "地図の候補地区をクリックして選択")
         if st.session_state.get("selection_note"): st.caption(st.session_state["selection_note"])
         b1,b2=st.columns(2)
-        if b1.button("推定案を選択",width="stretch"):
+        if b1.button("推定案を選択",width="stretch",disabled=view!=VIEWS[2],help="推定された浸水深を表示しているときに使用"):
             st.session_state["picked"]=dispatch(prediction,city.weight).tolist();st.session_state["selection_note"]="";st.rerun()
         if b2.button("選択を解除",width="stretch"):
             st.session_state["picked"]=[];st.session_state["selection_note"]="";st.rerun()
-        basis=st.radio("KPIの評価条件",["推定に基づく評価","実際の条件（参照）"],horizontal=True,key="ui_basis")
+        basis=st.radio("KPIの評価条件",["未評価","推定に基づく評価","実際の条件（参照）"],horizontal=True,key="ui_basis")
         actual=basis=="実際の条件（参照）"
         if actual: st.markdown('<div class="reference">参照用の真値で、現在の選択を評価</div>',unsafe_allow_html=True)
+        evaluated=basis!="未評価"
         h=city.truth if actual else prediction
         k=outcome(h,city.weight,pumps)
         c1,c2=st.columns(2)
-        c1.metric("被害軽減量",f"{k['avoided']:.2f}",help="対策前と対策後の被害指標の差。金額・人数ではない相対指標。")
-        c2.metric("被害軽減率",f"{k['rate']:.1f}%",help="全100区画の対策前被害に対する軽減量の割合。")
-        c1.metric("対策後に残る被害",f"{k['remaining']:.2f}")
-        c2.metric("重要地区の軽減量",f"{k['important']:.2f}",help="重要度６以上の区画の被害軽減量。全体の軽減量の内数。")
-        c1.metric("被害水準以下へ改善",f"{k['dry']} / 8",help="配分により代表区画の水深が0.10 m超から0.10 m以下になった候補地区数。安全判定ではない。")
-        c2.metric("被害水準超の地区",f"{k['residual']} / 8",help="対策後も代表区画の水深が0.10 mを超える候補地区数。")
-        st.caption(f"対策前の被害：{k['total']:.2f} ｜ 重要地区＝重要度６以上")
+        c1.metric("被害軽減量",f"{k['avoided']:.2f}" if evaluated else "—",help="対策前と対策後の被害指標の差。金額・人数ではない相対指標。")
+        c2.metric("被害軽減率",f"{k['rate']:.1f}%" if evaluated else "—",help="全100区画の対策前被害に対する軽減量の割合。")
+        c1.metric("対策後に残る被害",f"{k['remaining']:.2f}" if evaluated else "—")
+        c2.metric("重要地区の軽減量",f"{k['important']:.2f}" if evaluated else "—",help="重要度６以上の区画の被害軽減量。全体の軽減量の内数。")
+        c1.metric("被害水準以下へ改善",f"{k['dry']} / 8" if evaluated else "—",help="配分により代表区画の水深が0.10 m超から0.10 m以下になった候補地区数。安全判定ではない。")
+        c2.metric("被害水準超の地区",f"{k['residual']} / 8" if evaluated else "—",help="対策後も代表区画の水深が0.10 mを超える候補地区数。")
+        if evaluated: st.caption(f"対策前の被害：{k['total']:.2f} ｜ 重要地区＝重要度６以上")
         if actual:
             st.caption(f"全域の推定RMSE：{np.sqrt(np.mean((prediction-city.truth)**2)):.3f} m（配分ではなく観測・推定の評価）")
-        else: st.caption("KPIは現在の推定に基づく値。地図の表示切替では評価条件は変化しない。")
-    with st.expander("通報・現地測定の内容",expanded=False):
+        elif evaluated: st.caption("KPIは現在の推定に基づく値。地図の表示切替では評価条件は変化しない。")
+        else: st.caption("配分先を選び、評価条件を切り替えて結果を確認。")
+    with st.expander("通報の内容",expanded=False):
         st.dataframe([{"地区":CANDIDATES[r.cell],"時刻":r.time,"種類":r.kind,"内容":r.text,"件数":r.count} for r in rr],hide_index=True,width="stretch")
     with st.expander("候補地区の数値",expanded=False):
         st.dataframe([{"地区":CANDIDATES[i],"重要度":round(float(city.weight[i]),1),"推定水深 m":round(float(prediction[i]),2),"推定被害軽減":round(float(gains(prediction,city.weight)[i]),2)} for i in CANDIDATES],hide_index=True,width="stretch")
@@ -430,8 +436,9 @@ def main():
 - 被害＝重要度 × max(水深−0.10 m, 0) の全区画合計。重要度は施設・生活への影響を簡略化した設定。被害軽減量・残る被害は相対指標。
 - 「被害水準」はこのモデルの0.10 mという閾値。安全や通行可能性を示す基準ではない。
 - 定性的な冠水通報は、水深が正である片側の条件として利用（検出目安0.02 m）。水深を特定値に置換せず、同一事象の重複通報を重ねて加点しない。
-- 数値のある現地測定とセンサを誤差付きで利用。通報のない場所も事前情報と空間的な関係から推定。
-- 「情報の所在」は直接情報の位置と近傍1.8区画を分類した表示。信頼確率ではない。
+- センサ値と目測水深の通報を誤差付きで利用（目測の標準偏差0.08 m）。通報件数を独立した観測数として加算しない。通報のない場所も事前情報と空間的な関係から推定。
+- 観測・通報の地図では、水深の情報がない場所は灰色、冠水のみ判明した場所は縞模様。支援要請だけでは水深を補正しない。センサと数値通報が重なる場合はセンサ値を色と数値で表示し、通報はマウスオーバーで確認。
+- 事前情報のみの推定図は地形・排水条件に基づく事前推定。観測・通報を使用した推定と区別。
 - 地図の重要度・推定・真値は表示切替。右側の評価条件は独立。参照用の真値を見ても自動配分は推定だけを使用。
 - 全情報は同じ10:00時点。道路移動・水の流動・時間変化は省略。教育用の仮想モデル。""")
 
