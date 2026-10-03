@@ -264,9 +264,18 @@ def allocation_event(state, event):
     if state.get("click_ack") == event["token"]:
         return False
     state["click_ack"] = event["token"]
-    if event.get("scene") != state.get("ui_case"):
+    if event.get("scene") != state.get("ui_scene",state.get("ui_case")):
         return True
     cell = event.get("cell")
+    if state.get("map_mode")=="追加センサを置く" and state.get("ui_source")!=SOURCES[0]:
+        if isinstance(cell,bool) or not isinstance(cell,int) or not 0<=cell<N*N:
+            return True
+        if cell in state.get("base_sensors",[]):
+            state["sensor_note"]="既設センサのある地点。他のマスを選択"
+        else:
+            state["extra_sensor"]=None if state.get("extra_sensor")==cell else cell
+            state["sensor_note"]=""
+        return True
     if isinstance(cell, bool) or not isinstance(cell, int) or cell not in CANDIDATES:
         return True
     selected = list(state.get("picked", []))
@@ -340,7 +349,7 @@ GRID_HTML = r"""<!doctype html><html lang="ja"><head><meta charset="utf-8"><styl
 .wrap{max-width:390px;margin:auto}#grid{display:grid;grid-template-columns:19px repeat(10,minmax(0,1fr));gap:2px}
 .axis{display:flex;align-items:center;justify-content:center;color:#64748b;font-size:11px}
 .cell{position:relative;aspect-ratio:1;border:1px solid #dbe2e8;background:#eee;border-radius:3px;padding:1px;min-width:0;color:#172a41;overflow:hidden}
-.cell.candidate{cursor:pointer}
+.cell.candidate,.cell.sensor-target{cursor:pointer}.cell.extra-sensor{outline:2px dashed #2563eb;outline-offset:-4px}
 .cell.has-report{box-shadow:inset 0 0 0 3px #888}
 .cell.has-sensor:before{content:"";position:absolute;inset:0;border:1px solid #111;pointer-events:none;z-index:2}
 .cell.selected:after{content:"";position:absolute;inset:4px;border:2px solid #be123c;pointer-events:none;z-index:3}
@@ -353,7 +362,7 @@ GRID_HTML = r"""<!doctype html><html lang="ja"><head><meta charset="utf-8"><styl
 #scale{margin-top:7px;font-size:11px;display:flex;align-items:center;gap:7px}.ramp{width:125px;height:10px}
 #hint{min-height:36px;font-size:11px;line-height:1.5;margin-top:5px;color:#64748b}
 </style></head><body><div class="wrap"><div id="grid"></div>
-<div class="legend"><span class="item"><i class="box"></i>センサ</span><span class="item"><i class="box reported"></i>通報・要請</span><span class="item"><i class="box chosen"></i>派遣先・排水区域</span></div>
+<div class="legend"><span class="item"><i class="box"></i>センサ</span><span class="item"><i class="box" style="border:2px dashed #2563eb"></i>追加センサ</span><span class="item"><i class="box reported"></i>通報・要請</span><span class="item"><i class="box chosen"></i>派遣先・排水区域</span></div>
 <div class="legend" id="observation-legend"><span class="item"><i class="box" style="border:none;background:#e5e7eb"></i>水深の情報なし</span><span class="item"><i class="box" style="border:none;background:repeating-linear-gradient(135deg,#dbeafe 0px,#dbeafe 4px,#7da5c7 4px,#7da5c7 6px)"></i>冠水のみ判明</span><span>数値：m ／ 約：通報による目測</span></div>
 <div id="scale"></div><div id="hint"></div></div><script>
 let args,pending=null;
@@ -365,18 +374,20 @@ function render(){
  axis('');for(let i=1;i<=10;i++)axis(i);
  args.cells.forEach((c,i)=>{
   if(i%10===0)axis(String.fromCharCode(65+Math.floor(i/10)));
-  let e=document.createElement(c.candidate?'button':'div');e.className='cell'+(c.candidate?' candidate':'')+(c.selected?' selected':'')+(c.sensor?' has-sensor':'')+(c.report?' has-report':'')+(c.affected?' affected':'');e.style.background=c.color;e.dataset.cell=i;e.dataset.owner=c.owner;e.title=c.description;let edge=document.createElement('span');edge.className='area-edge';edge.style.borderWidth=c.edges.map(b=>b?'2px':'0px').join(' ');e.append(edge);
-  if(c.candidate){e.type='button';e.disabled=pending!==null;e.setAttribute('aria-pressed',String(c.selected));e.setAttribute('aria-label',c.name+' '+c.district);let t=document.createElement('span');t.className='district';t.textContent=c.district;e.append(t)}
+  const sensorMode=args.mode==='追加センサを置く';const selectable=sensorMode||c.candidate;
+  let e=document.createElement(selectable?'button':'div');e.className='cell'+(c.candidate?' candidate':'')+(c.selected?' selected':'')+(c.sensor?' has-sensor':'')+(c.report?' has-report':'')+(c.affected?' affected':'')+(sensorMode?' sensor-target':'')+(i===args.extra?' extra-sensor':'');e.style.background=c.color;e.dataset.cell=i;e.dataset.owner=c.owner;e.title=c.description;let edge=document.createElement('span');edge.className='area-edge';edge.style.borderWidth=c.edges.map(b=>b?'2px':'0px').join(' ');e.append(edge);
+  if(selectable){e.type='button';e.disabled=pending!==null;e.setAttribute('aria-pressed',String(sensorMode?i===args.extra:c.selected));e.setAttribute('aria-label',c.name+' '+c.district+(sensorMode?' 追加センサ地点':''))}
+  if(c.candidate){let t=document.createElement('span');t.className='district';t.textContent=c.district;e.append(t)}
   if(c.label){let t=document.createElement('span');t.className='depth';t.textContent=c.label;e.append(t)}
   e.onmouseenter=e.onfocus=()=>{document.getElementById('hint').textContent=c.description;grid.querySelectorAll('.cell').forEach(el=>el.classList.toggle('area-hover',Number(el.dataset.owner)===c.owner))};
   e.onmouseleave=e.onblur=()=>grid.querySelectorAll('.area-hover').forEach(el=>el.classList.remove('area-hover'));
-  if(c.candidate)e.onclick=()=>{if(pending!==null)return;pending=crypto.randomUUID();send('streamlit:setComponentValue',{value:{cell:i,token:pending,scene:args.scene},dataType:'json'});grid.querySelectorAll('button').forEach(b=>b.disabled=true)};
+  if(selectable)e.onclick=()=>{if(pending!==null)return;pending=crypto.randomUUID();send('streamlit:setComponentValue',{value:{cell:i,token:pending,scene:args.scene},dataType:'json'});grid.querySelectorAll('button').forEach(b=>b.disabled=true)};
   grid.append(e);
  });
  document.getElementById('observation-legend').style.display=args.observation?'flex':'none';
  const scale=document.getElementById('scale');scale.replaceChildren();
  let t=document.createElement('span');t.textContent=args.legend;let r=document.createElement('span');r.className='ramp';r.style.background=args.ramp;scale.append(t,r);
- document.getElementById('hint').textContent='地区名のあるマスをクリックして選択・解除（最大３地区）。マウスを重ねると排水区域と詳細を表示。';
+ document.getElementById('hint').textContent=args.mode==='追加センサを置く'?'任意のマスをクリックしてセンサを1地点追加。別のマスで移動、同じマスで解除。':'地区名のあるマスをクリックして選択・解除（最大３地区）。マウスを重ねると排水区域と詳細を表示。';
  if(focus!==undefined)grid.querySelector('button[data-cell="'+focus+'"]')?.focus({preventScroll:true});resize();
 }
 window.addEventListener('message',e=>{if(e.source!==parent||e.data.type!=='streamlit:render')return;args=e.data.args;if(args.ack===pending)pending=null;render()});
@@ -399,8 +410,8 @@ def clickable_grid(**kwargs):
 def main():
     import streamlit as st
     # Keep the evaluation selection when a map click reruns before the KPI widgets.
-    if "ui_basis" in st.session_state:
-        st.session_state["ui_basis"]=st.session_state["ui_basis"]
+    for key in ("ui_basis","ui_view"):
+        if key in st.session_state: st.session_state[key]=st.session_state[key]
     st.set_page_config(page_title="Mini Urban Flood Digital Twin",layout="wide")
     st.markdown("""<style>.block-container{padding-top:3rem;padding-bottom:.4rem;padding-left:1rem;padding-right:1rem;max-width:1450px}
     h1{font-size:1.65rem!important;margin-bottom:.1rem!important}h3{font-size:1.1rem!important}
@@ -413,14 +424,32 @@ def main():
     with st.sidebar:
         scenario=st.selectbox("豪雨ケース",[0,1,2],format_func=lambda i:["基本：局地豪雨","病院周辺の雨が弱い","病院周辺の雨が強い"][i],key="ui_weather")
         source=st.radio("利用する情報",SOURCES,index=0,key="ui_source")
-        count=st.slider("センサ数",3,30,3,key="ui_count",disabled=source==SOURCES[0])
+        count=st.slider("既設センサ数",3,30,3,key="ui_count",disabled=source==SOURCES[0])
         strategy=st.selectbox("配置戦略",STRATEGIES,key="ui_strategy",disabled=source==SOURCES[0])
         sigma=st.selectbox("センサ誤差 σ（m）",[0.,.03,.10,.20],index=1,key="ui_sigma",disabled=source==SOURCES[0])
     if st.session_state.get("ui_case")!=scenario:
-        st.session_state.update(ui_case=scenario,picked=[],selection_note="")
+        st.session_state.update(ui_case=scenario,picked=[],selection_note="",extra_sensor=None,sensor_note="")
     if source==SOURCES[0]: st.sidebar.caption("センサ・通報は未使用。重要度から配分を検討。")
     city=make_city(scenario);reports=make_reports(city)
-    sensors=sensor_order(city,strategy)[:count];values=observe(city,sensors,sigma)
+    base_sensors=sensor_order(city,strategy)[:count]
+    st.session_state["base_sensors"]=base_sensors.tolist()
+    extra=st.session_state.get("extra_sensor")
+    if extra in base_sensors:
+        extra=None;st.session_state["extra_sensor"]=None
+    with st.sidebar:
+        mode=st.radio("地図のクリック操作",["派遣先を選ぶ","追加センサを置く"],key="map_mode",disabled=source==SOURCES[0])
+        if extra is not None:
+            st.caption(f"追加地点：{cell_name(extra)} ｜ センサ合計：{count+1}地点" if source!=SOURCES[0] else f"追加地点：{cell_name(extra)}（未使用）")
+            if st.button("追加センサを解除"):
+                st.session_state["extra_sensor"]=None;st.session_state["sensor_note"]="";st.rerun()
+        elif source!=SOURCES[0] and mode=="追加センサを置く":
+            st.caption("任意のマスをクリック。既設センサに加えて1地点を指定。")
+        if st.session_state.get("sensor_note"): st.caption(st.session_state["sensor_note"])
+    effective_mode=mode if source!=SOURCES[0] else "派遣先を選ぶ"
+    scene=f"{scenario}:{strategy}:{count}:{source}:{effective_mode}"
+    st.session_state["ui_scene"]=scene
+    sensors=np.append(base_sensors,extra).astype(int) if extra is not None else base_sensors
+    values=observe(city,sensors,sigma)
     prediction,coverage=estimate_sources(city.xy,city.prior,reports,sensors,values,sigma,source)
     rr=reports if source==SOURCES[2] else []
     ss=sensors if source!=SOURCES[0] else np.array([],dtype=int)
@@ -431,7 +460,7 @@ def main():
         if view==VIEWS[3]: st.markdown('<div class="reference">参照用の真値：実運用では都市全体を直接把握できない情報</div>',unsafe_allow_html=True)
         if view==VIEWS[2] and source==SOURCES[0]: st.caption("地形・排水条件に基づく事前推定（観測・通報による補正なし）")
         event=clickable_grid(**grid_data(city,prediction,coverage,rr,ss,vv,st.session_state["picked"],view),
-                             ack=st.session_state.get("click_ack"),scene=scenario,key="allocation_grid",default=None)
+                             ack=st.session_state.get("click_ack"),scene=scene,mode=effective_mode,extra=extra if source!=SOURCES[0] else None,key="allocation_grid",default=None)
         if allocation_event(st.session_state,event): st.rerun()
         st.caption("1台で1地区の排水区域（6〜16区画）に作用。最大3地区。")
     with right:
@@ -477,6 +506,7 @@ def main():
 - 観測・通報の地図では、水深の情報がない場所は灰色、冠水のみ判明した場所は縞模様。支援要請だけでは水深を補正しない。センサと数値通報が重なる場合はセンサ値を色と数値で表示し、通報はマウスオーバーで確認。
 - 事前情報のみの推定図は地形・排水条件に基づく事前推定。観測・通報を使用した推定と区別。
 - 地図の重要度・推定・真値は表示切替。右側の評価条件は独立。参照用の真値を見ても自動配分は推定だけを使用。
+- 追加センサは既設配置に1地点だけ追加。同じ地点の観測値と誤差は固定し、移動しても乱数を引き直さない。情報を追加しても派遣先は自動変更しない。実際の条件でのKPIは配分を変えたときに変化。
 - 全情報は同じ10:00時点。道路移動・水の流動・時間変化は省略。教育用の仮想モデル。""")
 
 
