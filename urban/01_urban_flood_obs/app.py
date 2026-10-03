@@ -7,7 +7,7 @@ import numpy as np
 
 N = 10
 PUMP_COUNT = 3
-PUMP_DROP = 0.25  # m, same-cell reduction over the fixed intervention interval
+PUMP_DROP = 0.25  # m, upper bound per cell over a fixed intervention interval
 THRESHOLD = 0.10  # m, damage starts above this depth
 STRATEGIES = ("空間を均等にカバー", "重要地区を重点観測", "低地を重点観測")
 
@@ -39,12 +39,13 @@ def make_city(scenario=0):
     weight += importance_hill(2.0, 7.0, 3.5, 1.5, 1.2)
     # Depth = max(0, accumulated rain + terrain ponding - drainage).
     ponding = 0.22 * (elevation.max() - elevation)
-    prior = np.maximum(0, 0.20 + ponding - drainage)
-    broad = 0.24 * np.exp(-((x - 2)**2 + (y - 6)**2) / 16)
-    local = (0.36, 0.12, 0.46)[scenario] * np.exp(-((x - 7.6)**2 + (y - 1.4)**2) / 1.5)
-    rain = 0.20 + broad + local
-    drainage_error = 0.07 * np.sin(x * 0.7 + y * 0.45 + scenario)
-    truth = np.maximum(0, rain + ponding - drainage + drainage_error)
+    known_drainage = .10 * np.exp(-((x-1.5)**2+(y-6.5)**2)/14)
+    prior = np.maximum(0, 0.20 + ponding - drainage-known_drainage)
+    # Synthetic event: unobserved eastern flooding and better-than-expected western drainage.
+    broad = .38 * np.exp(-((x-7.0)**2+(y-5.5)**2)/9)
+    local = (.32, .08, .48)[scenario] * np.exp(-((x-7.7)**2+(y-1.3)**2)/3)
+    relief = .14 * np.exp(-((x-1.5)**2+(y-6.5)**2)/14)
+    truth = np.maximum(0, prior+broad+local-relief)
     noise = np.random.default_rng(2026 + scenario).normal(size=N*N)
     return City(xy, elevation, weight, prior, truth, noise)
 
@@ -54,7 +55,7 @@ def sensor_order(city, strategy):
     dist = np.sum((city.xy[:, None] - city.xy[None, :])**2, axis=2)
     if strategy == STRATEGIES[0]:
         priority = np.ones(N*N)
-        first = 44
+        first = 55
     elif strategy == STRATEGIES[1]:
         priority = city.weight
         first = int(np.argmax(priority))
@@ -94,7 +95,10 @@ def damage(depth, weight):
 
 
 def gains(depth, weight):
-    return damage(depth, weight) - damage(np.maximum(depth - PUMP_DROP, 0), weight)
+    cell_gains=damage(depth, weight) - damage(np.maximum(depth - PUMP_DROP, 0), weight)
+    result=np.zeros(N*N)
+    for anchor,cells in AREAS.items(): result[anchor]=cell_gains[cells].sum()
+    return result
 
 
 def dispatch(depth, weight):
@@ -109,8 +113,7 @@ def evaluate(city, pumps):
         raise ValueError("ポンプは異なる地点に最大3台です")
     if any(int(i) not in CANDIDATES for i in pumps):
         raise ValueError("都市外の地点です")
-    post = city.truth.copy()
-    post[pumps] = np.maximum(0, post[pumps] - PUMP_DROP)
+    post = after_pumping(city.truth,pumps)
     baseline = float(damage(city.truth, city.weight).sum())
     loss = float(damage(post, city.weight).sum())
     oracle = dispatch(city.truth, city.weight)
@@ -137,6 +140,33 @@ def cell_name(i):
 # Fixed feasible districts, independent of the hidden flood realization.
 CANDIDATES = {12:"北西住宅", 18:"病院東側", 27:"病院南側", 44:"中心市街地",
               55:"駅前", 62:"西部住宅", 73:"避難所周辺", 87:"南東住宅"}
+# Fixed, disjoint drainage service areas, independent of observations and truth.
+def rectangle(y0,y1,x0,x1):
+    return [y*N+x for y in range(y0,y1) for x in range(x0,x1)]
+AREAS = {
+    12: rectangle(0,4,0,4),
+    18: rectangle(0,3,8,10),
+    27: rectangle(0,4,6,8)+rectangle(3,4,8,10),
+    44: rectangle(0,4,4,6)+rectangle(4,6,3,5),
+    55: rectangle(4,7,5,10),
+    62: rectangle(4,7,0,3)+rectangle(6,7,3,5),
+    73: rectangle(7,10,0,5),
+    87: rectangle(7,10,5,10),
+}
+AREA_OWNER = {cell: anchor for anchor,cells in AREAS.items() for cell in cells}
+
+
+def after_pumping(depth, pumps):
+    ids=list(map(int,pumps))
+    if len(ids)>PUMP_COUNT or len(set(ids))!=len(ids) or any(i not in AREAS for i in ids):
+        raise ValueError("異なる候補地区を最大3地区まで選択")
+    post=np.asarray(depth,dtype=float).copy()
+    for anchor in ids:
+        region=AREAS[anchor]
+        post[region]=np.maximum(0,post[region]-PUMP_DROP)
+    return post
+
+
 SOURCES = ("事前情報のみ", "センサ情報を追加", "センサ＋通報")
 
 @dataclass(frozen=True)
@@ -254,17 +284,14 @@ def allocation_event(state, event):
 
 def outcome(depth, weight, pumps):
     """All decision KPIs use the chosen evaluation basis; no hidden truth."""
-    post=np.asarray(depth).copy()
-    ids=np.asarray(pumps,dtype=int)
-    post[ids]=np.maximum(0,post[ids]-PUMP_DROP)
+    post=after_pumping(depth,pumps)
     before=damage(depth,weight); after=damage(post,weight)
     total=float(before.sum()); avoided=float((before-after).sum())
-    candidate_ids=np.array(list(CANDIDATES))
     return dict(avoided=avoided, remaining=float(after.sum()),
                 rate=100*avoided/total if total else 0.,
                 important=float((before-after)[weight>=6].sum()),
-                residual=int(np.sum(post[candidate_ids]>THRESHOLD)),
-                dry=int(np.sum((np.asarray(depth)[candidate_ids]>THRESHOLD)&(post[candidate_ids]<=THRESHOLD))),
+                residual=int(np.sum(post>THRESHOLD)),
+                dry=int(np.sum((np.asarray(depth)>THRESHOLD)&(post<=THRESHOLD))),
                 total=total)
 
 
@@ -281,7 +308,9 @@ def grid_data(city, prediction, coverage, reports, sensors, values, pumps, view)
     for i in range(100):
         rr=by_cell.get(i,[])
         name=CANDIDATES.get(i,"")
-        detail=f"{cell_name(i)} {name} ｜ 重要度 {city.weight[i]:.1f}"
+        owner=AREA_OWNER[i]
+        region=AREAS[owner]
+        detail=f"{cell_name(i)} ｜ {CANDIDATES[owner]}の排水区域（{len(region)}区画） ｜ 重要度 {city.weight[i]:.1f}"
         if shown is not None and view!=VIEWS[0]: detail+=f" ｜ {view} {shown[i]:.2f} m"
         if i in numeric: detail+=f" ｜ センサ {numeric[i]:.2f} m（10:00）"
         detail+="".join(f" ｜ {r.kind} {r.count}件（{r.time}）：{r.text}" for r in rr)
@@ -297,7 +326,10 @@ def grid_data(city, prediction, coverage, reports, sensors, values, pumps, view)
             else:
                 detail+=" ｜ 浸水深の情報なし"
         cells.append(dict(name=cell_name(i),district=name,color=colors[i],candidate=i in CANDIDATES,
-                          selected=i in pumps,sensor=i in numeric,report=bool(rr),label=label,description=detail))
+                          selected=i in pumps,sensor=i in numeric,report=bool(rr),label=label,description=detail,
+                          owner=owner,affected=owner in pumps,
+                          edges=[i<N or AREA_OWNER.get(i-N)!=owner, i%N==N-1 or AREA_OWNER.get(i+1)!=owner,
+                                 i>=N*(N-1) or AREA_OWNER.get(i+N)!=owner, i%N==0 or AREA_OWNER.get(i-1)!=owner]))
     ramp=sample_colorscale(palette,[0,.25,.5,.75,1])
     return dict(cells=cells,legend="重要度 0–12" if view==VIEWS[0] else "浸水深 0–1 m",
                 ramp="linear-gradient(to right,"+",".join(ramp)+")",observation=view==VIEWS[1])
@@ -312,6 +344,7 @@ GRID_HTML = r"""<!doctype html><html lang="ja"><head><meta charset="utf-8"><styl
 .cell.has-report{box-shadow:inset 0 0 0 3px #888}
 .cell.has-sensor:before{content:"";position:absolute;inset:0;border:1px solid #111;pointer-events:none;z-index:2}
 .cell.selected:after{content:"";position:absolute;inset:4px;border:2px solid #be123c;pointer-events:none;z-index:3}
+.area-edge{position:absolute;inset:0;pointer-events:none;z-index:1;border-color:#bd4964;border-style:solid;opacity:0}.cell.affected .area-edge{opacity:1}.cell.area-hover .area-edge{opacity:1;border-color:#8b5cf6;border-style:dashed}
 .depth{display:block;font-size:9px;font-weight:700;line-height:1.05;background:rgba(255,255,255,.35)}
 .cell:focus-visible{outline:3px solid #2563eb;z-index:1}.cell.candidate:hover{filter:brightness(.92)}
 .district{display:block;font-size:clamp(8px,1.7vw,11px);font-weight:700;background:rgba(255,255,255,.35);line-height:1.2;border-radius:2px}
@@ -320,7 +353,7 @@ GRID_HTML = r"""<!doctype html><html lang="ja"><head><meta charset="utf-8"><styl
 #scale{margin-top:7px;font-size:11px;display:flex;align-items:center;gap:7px}.ramp{width:125px;height:10px}
 #hint{min-height:36px;font-size:11px;line-height:1.5;margin-top:5px;color:#64748b}
 </style></head><body><div class="wrap"><div id="grid"></div>
-<div class="legend"><span class="item"><i class="box"></i>センサ</span><span class="item"><i class="box reported"></i>通報・要請</span><span class="item"><i class="box chosen"></i>派遣先</span></div>
+<div class="legend"><span class="item"><i class="box"></i>センサ</span><span class="item"><i class="box reported"></i>通報・要請</span><span class="item"><i class="box chosen"></i>派遣先・排水区域</span></div>
 <div class="legend" id="observation-legend"><span class="item"><i class="box" style="border:none;background:#e5e7eb"></i>水深の情報なし</span><span class="item"><i class="box" style="border:none;background:repeating-linear-gradient(135deg,#dbeafe 0px,#dbeafe 4px,#7da5c7 4px,#7da5c7 6px)"></i>冠水のみ判明</span><span>数値：m ／ 約：通報による目測</span></div>
 <div id="scale"></div><div id="hint"></div></div><script>
 let args,pending=null;
@@ -332,17 +365,18 @@ function render(){
  axis('');for(let i=1;i<=10;i++)axis(i);
  args.cells.forEach((c,i)=>{
   if(i%10===0)axis(String.fromCharCode(65+Math.floor(i/10)));
-  let e=document.createElement(c.candidate?'button':'div');e.className='cell'+(c.candidate?' candidate':'')+(c.selected?' selected':'')+(c.sensor?' has-sensor':'')+(c.report?' has-report':'');e.style.background=c.color;e.dataset.cell=i;e.title=c.description;
+  let e=document.createElement(c.candidate?'button':'div');e.className='cell'+(c.candidate?' candidate':'')+(c.selected?' selected':'')+(c.sensor?' has-sensor':'')+(c.report?' has-report':'')+(c.affected?' affected':'');e.style.background=c.color;e.dataset.cell=i;e.dataset.owner=c.owner;e.title=c.description;let edge=document.createElement('span');edge.className='area-edge';edge.style.borderWidth=c.edges.map(b=>b?'2px':'0px').join(' ');e.append(edge);
   if(c.candidate){e.type='button';e.disabled=pending!==null;e.setAttribute('aria-pressed',String(c.selected));e.setAttribute('aria-label',c.name+' '+c.district);let t=document.createElement('span');t.className='district';t.textContent=c.district;e.append(t)}
   if(c.label){let t=document.createElement('span');t.className='depth';t.textContent=c.label;e.append(t)}
-  e.onmouseenter=e.onfocus=()=>document.getElementById('hint').textContent=c.description;
+  e.onmouseenter=e.onfocus=()=>{document.getElementById('hint').textContent=c.description;grid.querySelectorAll('.cell').forEach(el=>el.classList.toggle('area-hover',Number(el.dataset.owner)===c.owner))};
+  e.onmouseleave=e.onblur=()=>grid.querySelectorAll('.area-hover').forEach(el=>el.classList.remove('area-hover'));
   if(c.candidate)e.onclick=()=>{if(pending!==null)return;pending=crypto.randomUUID();send('streamlit:setComponentValue',{value:{cell:i,token:pending,scene:args.scene},dataType:'json'});grid.querySelectorAll('button').forEach(b=>b.disabled=true)};
   grid.append(e);
  });
  document.getElementById('observation-legend').style.display=args.observation?'flex':'none';
  const scale=document.getElementById('scale');scale.replaceChildren();
  let t=document.createElement('span');t.textContent=args.legend;let r=document.createElement('span');r.className='ramp';r.style.background=args.ramp;scale.append(t,r);
- document.getElementById('hint').textContent='地区名のあるマスをクリックして選択・解除（最大３地区）。各地点にカーソルを置くと詳細を表示。';
+ document.getElementById('hint').textContent='地区名のあるマスをクリックして選択・解除（最大３地区）。マウスを重ねると排水区域と詳細を表示。';
  if(focus!==undefined)grid.querySelector('button[data-cell="'+focus+'"]')?.focus({preventScroll:true});resize();
 }
 window.addEventListener('message',e=>{if(e.source!==parent||e.data.type!=='streamlit:render')return;args=e.data.args;if(args.ack===pending)pending=null;render()});
@@ -399,6 +433,7 @@ def main():
         event=clickable_grid(**grid_data(city,prediction,coverage,rr,ss,vv,st.session_state["picked"],view),
                              ack=st.session_state.get("click_ack"),scene=scenario,key="allocation_grid",default=None)
         if allocation_event(st.session_state,event): st.rerun()
+        st.caption("1台で1地区の排水区域（6〜16区画）に作用。最大3地区。")
     with right:
         pumps=st.session_state["picked"]
         st.subheader(f"配分先 {len(pumps)} / 3地区")
@@ -419,10 +454,10 @@ def main():
         c1.metric("被害軽減量",f"{k['avoided']:.2f}" if evaluated else "—",help="対策前と対策後の被害指標の差。金額・人数ではない相対指標。")
         c2.metric("被害軽減率",f"{k['rate']:.1f}%" if evaluated else "—",help="全100区画の対策前被害に対する軽減量の割合。")
         c1.metric("対策後に残る被害",f"{k['remaining']:.2f}" if evaluated else "—")
-        c2.metric("重要地区の軽減量",f"{k['important']:.2f}" if evaluated else "—",help="重要度６以上の区画の被害軽減量。全体の軽減量の内数。")
-        c1.metric("被害水準以下へ改善",f"{k['dry']} / 8" if evaluated else "—",help="配分により代表区画の水深が0.10 m超から0.10 m以下になった候補地区数。安全判定ではない。")
-        c2.metric("被害水準超の地区",f"{k['residual']} / 8" if evaluated else "—",help="対策後も代表区画の水深が0.10 mを超える候補地区数。")
-        if evaluated: st.caption(f"対策前の被害：{k['total']:.2f} ｜ 重要地区＝重要度６以上")
+        c2.metric("重要区画の軽減量",f"{k['important']:.2f}" if evaluated else "—",help="重要度６以上の区画の被害軽減量。全体の軽減量の内数。")
+        c1.metric("改善した区画数",f"{k['dry']} / 100" if evaluated else "—",help="排水区域への作用により、水深が0.10 m超から0.10 m以下になった区画数。安全判定ではない。")
+        c2.metric("被害水準超の区画数",f"{k['residual']} / 100" if evaluated else "—",help="対策後も水深が0.10 mを超える区画数。全100区画を集計。")
+        if evaluated: st.caption(f"対策前の被害：{k['total']:.2f} ｜ 重要区画＝重要度６以上")
         if actual:
             st.caption(f"全域の推定RMSE：{np.sqrt(np.mean((prediction-city.truth)**2)):.3f} m（配分ではなく観測・推定の評価）")
         elif evaluated: st.caption("KPIは現在の推定に基づく値。地図の表示切替では評価条件は変化しない。")
@@ -430,9 +465,11 @@ def main():
     with st.expander("通報の内容",expanded=False):
         st.dataframe([{"地区":CANDIDATES[r.cell],"時刻":r.time,"種類":r.kind,"内容":r.text,"件数":r.count} for r in rr],hide_index=True,width="stretch")
     with st.expander("候補地区の数値",expanded=False):
-        st.dataframe([{"地区":CANDIDATES[i],"重要度":round(float(city.weight[i]),1),"推定水深 m":round(float(prediction[i]),2),"推定被害軽減":round(float(gains(prediction,city.weight)[i]),2)} for i in CANDIDATES],hide_index=True,width="stretch")
+        st.dataframe([{"地区":CANDIDATES[i],"区域の区画数":len(AREAS[i]),"重要度の合計":round(float(city.weight[AREAS[i]].sum()),1),"区域の平均推定水深 m":round(float(prediction[AREAS[i]].mean()),2),"推定被害軽減":round(float(gains(prediction,city.weight)[i]),2)} for i in CANDIDATES],hide_index=True,width="stretch")
     with st.expander("モデル・KPI・凡例の補足",expanded=False):
-        st.markdown("""- 候補８地区の代表区画から最大３区画を選択。１台でその区画の水深を最大0.25 m低減。
+        st.markdown("""- 候補８地区から最大３地区を選択。１台が担当する固定の排水区域内の全区画で、水深を最大0.25 m低減。区域は重複せず、各地区に最大１台。地区名のマスは配置地点であり、効果は区域全体に及ぶ。
+- 区画面積は同一と仮定。区域によって広さと排水条件が異なり、１台当たりの排水体積を同一にはしていない。流動・ポンプ能力・稼働時間の詳細は省略した教育用の効果モデル。
+- 基本ケースは東部の広い浸水と病院周辺の局地雨、西部の想定以上の排水を組み合わせた仮想事例。センサ配置は重要度・地形・位置だけで決定し、実際の浸水深を参照しない。
 - 被害＝重要度 × max(水深−0.10 m, 0) の全区画合計。重要度は施設・生活への影響を簡略化した設定。被害軽減量・残る被害は相対指標。
 - 「被害水準」はこのモデルの0.10 mという閾値。安全や通行可能性を示す基準ではない。
 - 定性的な冠水通報は、水深が正である片側の条件として利用（検出目安0.02 m）。水深を特定値に置換せず、同一事象の重複通報を重ねて加点しない。
