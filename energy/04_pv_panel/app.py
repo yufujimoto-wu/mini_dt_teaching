@@ -84,8 +84,8 @@ def geometry_chart(data, hour, tilt, azimuth):
         fig.add_trace(go.Scatter3d(x=[position[0]], y=[position[1]], z=[position[2]],
                                   text=[text], mode="text", textfont=dict(size=16),
                                   showlegend=False, hoverinfo="skip"))
-    fig.update_layout(height=320, margin=dict(l=0, r=0, t=5, b=0),
-                      legend=dict(orientation="h", x=0, y=0),
+    fig.update_layout(height=320, margin=dict(l=0, r=0, t=10, b=30),
+                      legend=dict(orientation="h", x=0, y=-.08, font=dict(size=12)),
                       scene=dict(xaxis=dict(visible=False, range=[-2, 2]),
                                  yaxis=dict(visible=False, range=[-2, 2]),
                                  zaxis=dict(visible=False, range=[0, 2.5]),
@@ -105,8 +105,8 @@ def output_chart(data, hour, compare):
                                  name="水平面の日射をそのまま使う計算",
                                  line=dict(color="#9a94ab", width=2, dash="dot")))
     fig.add_vline(x=hour, line_color="#c08a2a", line_dash="dash")
-    fig.update_layout(height=320, margin=dict(l=45, r=10, t=10, b=50),
-                      legend=dict(orientation="h", x=0, y=1.13),
+    fig.update_layout(height=320, margin=dict(l=50, r=15, t=50, b=55),
+                      legend=dict(orientation="h", x=0, y=1.20, font=dict(size=11)),
                       hovermode="x unified", paper_bgcolor="white", plot_bgcolor="#fafbfd",
                       font=dict(color="#213449", size=13))
     fig.update_xaxes(title="時刻（太陽時：南中が12時）", range=[4, 20], dtick=2, gridcolor="#e8edf2")
@@ -123,13 +123,14 @@ def main():
     st.set_page_config(page_title="Mini PV Panel Digital Twin", layout="wide")
     st.markdown("""<style>
     .block-container {padding:3rem 1.8rem .5rem;max-width:1450px;}
-    h1 {font-size:1.6rem!important;padding:.1rem 0!important;line-height:1.5!important;margin-bottom:.5rem!important;}
-    h3 {font-size:1rem!important;padding:.1rem 0!important;}
-    [data-testid="stVerticalBlock"] {gap:.35rem;}
+    .demo-title {font-size:1.6rem;font-weight:700;line-height:1.45;padding:.2rem 0 .6rem;}
+    .section-title {font-size:1.05rem;font-weight:600;line-height:1.5;padding:.3rem 0 .4rem;}
+    [data-testid="stVerticalBlock"] {gap:.5rem;}
+    [data-testid="stCaptionContainer"] p {line-height:1.55;margin:0;}
     [data-testid="stMetricValue"] {font-size:1.7rem;}
     [data-testid="stSidebar"] {min-width:260px;max-width:280px;}
     </style>""", unsafe_allow_html=True)
-    st.title("Mini PV Panel Digital Twin")
+    st.markdown('<div class="demo-title">Mini PV Panel Digital Twin</div>', unsafe_allow_html=True)
     with st.sidebar:
         st.subheader("パネルの設定")
         season = st.selectbox("季節", list(SEASONS))
@@ -143,14 +144,14 @@ def main():
     left, right = st.columns([1, 1.45])
     i = int(round(hour * 12))
     with left:
-        st.subheader("太陽の方向とパネル面")
+        st.markdown('<div class="section-title">太陽の方向とパネル面</div>', unsafe_allow_html=True)
         st.plotly_chart(geometry_chart(data, hour, tilt, AZIMUTHS[direction]), use_container_width=True)
         if data["altitude"][i] > 0:
             st.caption(f"{hour:g}時：太陽高度 {data['altitude'][i]:.0f}° ／ 入射角 {data['incidence'][i]:.0f}°（法線との角度）")
         else:
             st.caption(f"{hour:g}時：太陽は地平線の下")
     with right:
-        st.subheader("１日の発電出力")
+        st.markdown('<div class="section-title">１日の発電出力</div>', unsafe_allow_html=True)
         st.plotly_chart(output_chart(data, hour, compare), use_container_width=True)
         st.caption("縦の点線：左で指定した時刻。時刻の変更は１日の計算条件を変更しない。")
     metrics = st.columns(3)
@@ -166,7 +167,7 @@ def main():
         st.latex(r"G_{\mathrm{面}}=DNI\max(0,\cos\theta)+DHI\frac{1+\cos\beta}{2}+\rho GHI\frac{1-\cos\beta}{2}")
         st.markdown("入射角 θ：太陽の方向とパネル面の法線との角度。傾斜角 β：水平面からの角度。"
                     "DNI：直達日射、DHI：水平面の散乱日射、GHI：水平面の全天日射。地表の反射率 ρ＝0.2。")
-        st.caption("日射は教材用の晴天条件。実測値・気象予報ではない。太陽位置は緯度35.7°と代表日の簡易計算。"
+        st.caption("晴天条件。太陽位置は緯度35.7°と代表日から計算。"
                    "時刻は太陽時で、時計の日本標準時とは異なる。影・温度による効率変化・機器損失は含まない。"
                    "発電出力は直流出力の推定。比較線は同じ効率・面積で水平面の日射を使う計算（傾斜0°と一致）。")
 
