@@ -4,7 +4,6 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
-"""One-node sensible-heat teaching model. All profiles are explicit scenarios, not measured data."""
 from dataclasses import dataclass
 import numpy as np
 import pandas as pd
