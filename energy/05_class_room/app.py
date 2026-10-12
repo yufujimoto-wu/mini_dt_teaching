@@ -87,7 +87,7 @@ h2,h3 {font-size:1.02rem !important;padding:.2rem 0 !important;}
 .kpi-label {font-size:13px;color:#526272;}.kpi-value {font-size:24px;font-weight:650;color:#007c91;}
 .kpi-value small,.kpi-base {font-size:12px;font-weight:400;color:#526272;}
 </style>''',unsafe_allow_html=True)
-st.title('Mini Energy  Digital Twin')
+st.title('Mini Class Room Energy Digital Twin')
 st.caption('室温の条件を満たしながら、冷房を低炭素な時間帯へ移す ｜ 授業 13:00–16:00')
 with st.sidebar:
     st.subheader('予冷と授業中の運転')
