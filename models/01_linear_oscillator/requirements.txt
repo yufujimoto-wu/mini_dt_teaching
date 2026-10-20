@@ -1,4 +1,5 @@
-streamlit>=1.50,<2
-plotly>=5.20,<7
-numpy>=1.25,<3
-pandas>=2,<4
+streamlit==1.66.0
+plotly==6.9.0
+numpy==2.5.4
+pandas==3.0.6
+pyarrow==26.0.0
