@@ -63,17 +63,17 @@ with st.sidebar:
     st.subheader('初期貯留')
     st.slider('流域の初期貯留 S₀（等価水深）[mm]',0.,30.,step=1.,key='s0',on_change=restart)
     st.slider('河道の初期貯留 V₀ [万m³]',0.,20.,step=.5,key='v0',on_change=restart)
-    st.caption('S₀は等価水深×流域面積で水量へ換算。h₀は水位の基準で、初期水位はh₀+V₀/Aᵣです。')
+    #st.caption('S₀は等価水深×流域面積で水量へ換算。h₀は水位の基準で、初期水位はh₀+V₀/Aᵣです。')
     st.subheader('有効降雨（三角形の波形）')
     st.slider('ピークの有効降雨強度 [mm/h]',0.,100.,step=5.,key='peak',on_change=restart)
     st.slider('降雨開始時刻 [h]',0.,6.,step=.25,key='onset',on_change=restart)
     st.slider('降雨継続時間 [h]',.5,6.,step=.25,key='width',on_change=restart)
-    st.caption('降雨開始から継続時間の半分でピークに達し、その後0へ戻ります。流出に寄与する有効降雨を直接与えます。')
+    #st.caption('降雨開始から継続時間の半分でピークに達し、その後0へ戻ります。流出に寄与する有効降雨を直接与えます。')
     st.subheader('表示と再生')
     st.slider('表示する基準水位 [m]',.5,10.,step=.1,key='threshold')
     st.slider('計算時間 [h]',3.,12.,step=1.,key='duration',on_change=restart)
     st.select_slider('再生速度',options=[.25,.5,1.,2.,4.],key='speed',on_change=speed_change,format_func=lambda x:f'{x:g} 倍')
-    st.caption('1倍ではモデルの1時間を約20秒で再生。表示基準以外のモデル条件を変えると時刻0へ戻ります。')
+    #st.caption('1倍ではモデルの1時間を約20秒で再生。表示基準以外のモデル条件を変えると時刻0へ戻ります。')
 
 st.title('貯留と流出による水位の時間変化')
 st.caption('流域と河道をそれぞれ一つの貯留として表す、講義用の確定的なモデルです。')
@@ -93,7 +93,7 @@ buttons[1].button('⏸ 一時停止',on_click=pause,disabled=not ss.playing,widt
 buttons[2].button('↶ 先頭に戻る',on_click=restart,width='stretch')
 buttons[3].button('全時間を表示',on_click=show_all,width='stretch')
 st.slider('時刻を指定 [h]（操作すると一時停止）',0.,ss.duration,step=.05,key='seek',on_change=seek)
-st.caption('スライダーは時刻指定用です。再生中の現在時刻は数値と縦線で表示します。')
+#st.caption('スライダーは時刻指定用です。再生中の現在時刻は数値と縦線で表示します。')
 
 @st.cache_data(show_spinner=False)
 def calculate(area,river_area,tc,tr,h0,s0,v0,peak,onset,width,duration):
@@ -104,7 +104,7 @@ area=ss.area*1e6
 smax=max(1.,max(data['s'])/area*1000*1.15)
 hmax=max(ss.threshold*1.15,max(data['h'])*1.15,ss.h0+.5)
 flowmax=max(1.,max(data['qin']),max(data['qout']),ss.area*ss.peak/3.6)
-if ss.onset>=ss.duration:st.info('降雨開始が計算期間の外にあります。この区間では初期貯留からの流出だけを表示します。')
+#if ss.onset>=ss.duration:st.info('降雨開始が計算期間の外にあります。この区間では初期貯留からの流出だけを表示します。')
 
 
 def diagram(state):
@@ -144,7 +144,7 @@ def diagram(state):
     <text x="590" y="335" text-anchor="middle" font-size="18" fill="#6b21a8">V = {state['v']/10000:.2f} 万m³</text>
     <text x="590" y="362" text-anchor="middle" font-size="19" fill="#075985">h = {state['h']:.2f} m</text>
     <text x="765" y="265" text-anchor="middle" font-size="18" fill="#475569">下流へ</text>
-    <text x="425" y="393" text-anchor="middle" font-size="15" fill="#64748b">左右は異なる尺度。水面の表示倍率と流量矢印の尺度は再生中固定。</text>
+#    <text x="425" y="393" text-anchor="middle" font-size="15" fill="#64748b">左右は異なる尺度。水面の表示倍率と流量矢印の尺度は再生中固定。</text>
     </svg>'''
 
 
@@ -164,7 +164,7 @@ def animation():
         st.markdown(diagram(state),unsafe_allow_html=True)
         change=state['qin']-state['qout']
         st.write('**河道の水位：'+('上昇中**' if change>1e-6 else '低下中**' if change < -1e-6 else 'ほぼ一定**')+f'　流入−流出 = {change:+.2f} m³/s')
-        st.caption('h₀は水位の換算基準（灰色点線）です。河道の貯留Vはh₀からの水位増分に対応します。')
+        st.caption('h₀は水位の換算基準（灰色点線）．河道の貯留Vはh₀からの水位増分に対応．')
     with right:
         st.subheader('水位の時間変化')
         # Slice by actual time, including additional rainfall breakpoints.
@@ -178,7 +178,7 @@ def animation():
         fig.update_layout(height=340,margin=dict(t=45,l=45,r=15,b=45),legend=dict(orientation='h',y=1.02,yanchor='bottom'),uirevision='water',xaxis=dict(title='時間 [h]',range=[0,ss.duration],fixedrange=True),yaxis=dict(title='水位 [m]',range=[0,hmax],fixedrange=True))
         st.plotly_chart(fig,width='stretch',key='water_level',config={'displayModeBar':False})
     st.progress(min(1.,ss.t/ss.duration))
-    if state['h']>=ss.threshold:st.info('現在の水位が表示基準以上です。この基準は流出量や貯留量を変えません。')
+    if state['h']>=ss.threshold:st.info('現在の水位が表示基準以上．')
     else:st.caption(f"表示基準まで {ss.threshold-state['h']:.2f} m")
     with st.expander('有効降雨・流量・貯留量の推移'):
         fig=make_subplots(rows=3,cols=1,shared_xaxes=True,vertical_spacing=.09,subplot_titles=['有効降雨','河道への流入と下流への流出','流域と河道の貯留水量'])
@@ -191,7 +191,7 @@ def animation():
         fig.update_xaxes(range=[0,ss.duration]);fig.update_xaxes(title_text='時間 [h]',row=3,col=1)
         fig.update_layout(height=620,margin=dict(t=60),legend=dict(orientation='h',y=1.08))
         st.plotly_chart(fig,width='stretch',key='diagnostics')
-        st.caption(f"現在までの累積有効降雨量：{state['input']/10000:.3f} 万m³ ／ 累積下流流出量：{state['output']/10000:.3f} 万m³。水収支の数値残差：{state['balance']:.2e} m³")
+        st.caption(f"現在までの累積有効降雨量：{state['input']/10000:.3f} 万m³ ／ 累積下流流出量：{state['output']/10000:.3f} 万m³．水収支の数値残差：{state['balance']:.2e} m³")
     if ss.t>=ss.duration:
         peak_index=max(range(len(data['h'])),key=lambda i:data['h'][i])
         st.write(f"計算期間内の最高水位：**{data['h'][peak_index]:.2f} m**（時刻 {data['t'][peak_index]:.2f} h）")
@@ -202,4 +202,4 @@ def animation():
     if was_playing and not ss.playing:st.rerun()
 
 animation()
-st.caption('授業用の簡略モデル。内部では10秒以下の区間ごとに降雨を一定近似し、2段の線形貯留式を解析的に更新します。')
+st.caption('授業用の簡略モデル．内部では10秒以下の区間ごとに降雨を一定近似し，2段の線形貯留式を解析的に更新．')
