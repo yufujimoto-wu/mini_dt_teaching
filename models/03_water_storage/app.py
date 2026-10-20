@@ -76,17 +76,15 @@ with st.sidebar:
     #st.caption('1倍ではモデルの1時間を約20秒で再生。表示基準以外のモデル条件を変えると時刻0へ戻ります。')
 
 st.title('貯留と流出による水位の時間変化')
-st.caption('流域と河道をそれぞれ一つの貯留として表す、講義用の確定的なモデルです。')
+#st.caption('流域と河道をそれぞれ一つの貯留として表す、講義用の確定的なモデルです。')
 with st.expander('講義資料の式・単位・見方'):
     a,b=st.columns(2)
     a.latex(r'\frac{dS}{dt}=Ar_e-Q_{\mathrm{in}},\qquad Q_{\mathrm{in}}=\frac{S}{\tau_c}')
     b.latex(r'\frac{dV}{dt}=Q_{\mathrm{in}}-Q_{\mathrm{out}},\qquad Q_{\mathrm{out}}=\frac{V}{\tau_r}')
     st.latex(r'h=h_0+\frac{V}{A_r}')
-    st.markdown('''流域の水量Sと河道の水量Vはm³、流量はm³/s、式内の時間は秒で計算します。左パネルのkm²・万m²・mm/h・時間は内部で換算します。
+    st.markdown('''流域の水量Sと河道の水量Vはm³，流量はm³/s，式内の時間は秒．左パネルのkm²・万m²・mm/h・時間は内部で換算．
 
-**流域**は有効降雨によって水が増え、S/τcで河道へ流出します。**河道**は流入と下流への流出の差で貯留が変わります。水位の基準h₀は初期水位とは異なります。
-
-流域タンクの表示深さはS/Aの等価水深です。河道は有効水面積一定の模式図で、実際の河川断面を再現したものではありません。潮位・背水・氾濫は扱いません。表示基準水位は比較用で、水の流れを変えません。''')
+**流域**は有効降雨によって水が増え，S/τcで河道へ流出．**河道**は流入と下流への流出の差で貯留が変化''')
 buttons=st.columns(4)
 buttons[0].button('▶ 再生',on_click=play,disabled=ss.playing,width='stretch')
 buttons[1].button('⏸ 一時停止',on_click=pause,disabled=not ss.playing,width='stretch')
@@ -202,4 +200,4 @@ def animation():
     if was_playing and not ss.playing:st.rerun()
 
 animation()
-st.caption('授業用の簡略モデル．内部では10秒以下の区間ごとに降雨を一定近似し，2段の線形貯留式を解析的に更新．')
+#st.caption('授業用の簡略モデル．内部では10秒以下の区間ごとに降雨を一定近似し，2段の線形貯留式を解析的に更新．')
