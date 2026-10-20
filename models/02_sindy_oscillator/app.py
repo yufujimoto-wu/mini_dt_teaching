@@ -4,14 +4,14 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-from oscillator import state_at
+from discovery import true_state_at as state_at, true_path
 from discovery import records, derivative_data, stlsq, rollout, NAMES
 
 st.set_page_config(page_title='台車の運動から方程式を探す：SINDy', layout='wide')
 st.markdown('<style>.block-container{padding-top:1.5rem}div[data-testid="stMetricValue"]{font-size:1.6rem}</style>', unsafe_allow_html=True)
 DEFAULTS = dict(m=1.0, k=4.0, c=0.3, x0=0.5, v0=0.0, duration=20.0, speed=1.0,
                 sensor_dt=0.1, noise=0.005, seed=42, fraction=0.65,
-                mode='理想条件：正確な変位・速度・加速度', window=11, degree=3, threshold=0.03)
+                mode='理想条件：正確な変位・速度・加速度', window=11, degree=3, threshold=0.03, quadratic=False, q=2.0)
 ss = st.session_state
 for key, value in DEFAULTS.items():
     ss.setdefault(key, value)
@@ -65,6 +65,10 @@ def preset(name):
         ss.mode, ss.noise = '変位センサ：差分で微分', 0.01
     elif name == '④ 平滑化して微分':
         ss.mode, ss.noise = '変位センサ：平滑化して微分', 0.01
+    elif name == '⑤ 二次項を発見':
+        ss.quadratic, ss.q, ss.degree = True, 2.0, 2
+    elif name == '⑥ 二次項を候補から外す':
+        ss.quadratic, ss.q, ss.degree = True, 2.0, 1
     ss.rate = ss.speed
     restart()
 
@@ -72,13 +76,16 @@ with st.sidebar:
     st.header('条件設定')
     st.button('初期設定に戻す', on_click=reset, width='stretch')
     with st.expander('授業用の設定例'):
-        for name in ['① 理想条件で式を発見', '② 必要な項まで削る', '③ ノイズと数値微分', '④ 平滑化して微分']:
+        for name in ['① 理想条件で式を発見', '② 必要な項まで削る', '③ ノイズと数値微分', '④ 平滑化して微分', '⑤ 二次項を発見', '⑥ 二次項を候補から外す']:
             st.button(name, on_click=preset, args=(name,), width='stretch')
         st.caption('設定後に「全時間を記録して停止」→「記録から式を学習する」。')
     st.subheader('物理パラメータ')
     st.slider('質量 m [kg]', .2, 10., step=.1, key='m', on_change=restart)
     st.slider('ばね定数 k [N/m]', .2, 40., step=.2, key='k', on_change=restart)
     st.slider('減衰係数 c [N·s/m]', 0., 20., step=.1, key='c', on_change=restart)
+    st.checkbox('真の復元力に二次項を含める', key='quadratic', on_change=restart)
+    st.slider('二次の復元力係数 q [N/m²]', -4., 4., step=.2, key='q', on_change=restart, disabled=not ss.quadratic)
+    st.caption('真の復元力は kx + qx²。オン・オフで真の対象を変えます。学習側の候補次数とは別の設定です。')
     st.subheader('初期条件')
     st.slider('初期変位 x₀ [m]', -1., 1., step=.05, key='x0', on_change=restart)
     st.slider('初期速度 v₀ [m/s]', -2., 2., step=.1, key='v0', on_change=restart)
@@ -102,6 +109,8 @@ st.title('台車の運動から方程式を探す：SINDy')
 st.caption('候補項から、加速度を説明する少数の項を選びます。このデモでは運動学の関係 ẋ = v を既知とします。')
 with st.expander('デモの見方・学習に使う情報'):
     st.markdown('''
+真の対象の二次項のオン・オフと、学習側の候補次数は独立に設定できます。⑤で二次項を見つけ、⑥で候補を1次に制限した場合を比較してください。
+
 1. 再生し、記録周期ごとに増える赤い×を確認します。
 2. 「記録から式を学習する」を押すと、現在までの記録の前半から式を推定します。後半は学習に使いません。
 3. 候補項、しきい値を変えて再学習し、残る項と、学習した式から再計算した波形を比較します。
@@ -119,16 +128,29 @@ buttons[2].button('↶ 先頭に戻る', on_click=restart, width='stretch')
 buttons[3].button('全時間を記録して停止', on_click=all_records, width='stretch')
 st.slider('時刻を指定 [s]（操作すると一時停止）', 0., ss.duration, step=.05, key='seek', on_change=seek)
 st.caption('スライダーは時刻指定用です。現在の再生時刻は下に表示します。')
-params = (ss.m,ss.k,ss.c,ss.x0,ss.v0)
+params = (ss.m,ss.k,ss.c,ss.x0,ss.v0,ss.q if ss.quadratic else 0.0,ss.duration)
 limit = max(.1, 1.15*math.sqrt(ss.x0**2+ss.m/ss.k*ss.v0**2))
 zeta = ss.c/(2*math.sqrt(ss.m*ss.k))
-st.write(f'減衰比 ζ = {zeta:.3f}　固有周期 Tₙ = {2*math.pi*math.sqrt(ss.m/ss.k):.2f} s')
+st.write(f'平衡位置付近の線形化：減衰比 ζ = {zeta:.3f}　固有周期 Tₙ = {2*math.pi*math.sqrt(ss.m/ss.k):.2f} s')
+if ss.quadratic:
+    st.latex(r'm\ddot{x}+c\dot{x}+kx+q x^2=0')
+    st.caption('二次項のある復元力は左右非対称です。表示した周期は平衡位置付近での目安です。')
+else:
+    st.latex(r'm\ddot{x}+c\dot{x}+kx=0')
 
 @st.cache_data(show_spinner=False)
 def data(duration, dt, noise, seed, params):
     return records(duration,dt,noise,seed,params)
 
-ts, truth_x, truth_v, truth_a, observed = data(ss.duration,ss.sensor_dt,ss.noise,ss.seed,params)
+try:
+    ts, truth_x, truth_v, truth_a, observed = data(ss.duration,ss.sensor_dt,ss.noise,ss.seed,params)
+    if ss.quadratic:
+        _,true_states = true_path(params)
+        limit = max(limit,float(np.max(np.abs(true_states[:,0])))*1.15)
+except ValueError as exc:
+    ss.playing = False
+    st.error(str(exc))
+    st.stop()
 plot_limit = max(limit, float(np.max(np.abs(observed)))*1.1)
 
 def cart_svg(x):
@@ -203,9 +225,9 @@ def show_report(r):
     if model['rank'] < model['columns'] or model['condition'] > 1e8:
         st.warning('候補項の関係が強く重なり、係数を区別しにくい条件です。別の初期条件や候補項の削減でも確かめてください。')
     with st.expander('生成に用いた真の式・係数との比較'):
-        m,k,c,_,_ = r['params']
-        st.latex(rf'\dot x=v,\qquad\dot v=-{k/m:.4g}x-{c/m:.4g}v')
-        st.caption('真の式は答え合わせ用です。SINDyの候補選択に係数を渡していません。発見できるのはk/m・c/mという比で、m・k・cの個別の特定には追加情報が必要です。')
+        m,k,c,_,_,q,_ = r['params']
+        st.latex(equation(np.array([0.,-k/m,-c/m,-q/m,0.,0.])))
+        st.caption('真の式は答え合わせ用です。SINDyの候補選択に係数を渡していません。発見できるのはk/m・c/m・q/mという比で、m・k・c・qの個別の特定には追加情報が必要です。')
     st.subheader('項を選ぶ過程')
     stage = st.slider('推定ステップ（0：全候補で最小二乗）', 0, max(1,len(model['history'])-1), value=0, key='stage') if len(model['history'])>1 else 0
     if len(model['history'])==1:
@@ -246,7 +268,7 @@ def show_report(r):
         st.warning('学習した式の計算が表示範囲を超えています。数値発散時は以後の計算を打ち切り、検証誤差をinfと表示します。')
     with st.expander('数値微分で得た加速度・記録データ'):
         fig = go.Figure()
-        ta = [-(r['params'][2]*state_at(float(ti),*r['params'])[1]+r['params'][1]*state_at(float(ti),*r['params'])[0])/r['params'][0] for ti in r['td']]
+        ta = [-(r['params'][2]*state_at(float(ti),*r['params'])[1]+r['params'][1]*state_at(float(ti),*r['params'])[0]+r['params'][5]*state_at(float(ti),*r['params'])[0]**2)/r['params'][0] for ti in r['td']]
         fig.add_trace(go.Scatter(x=r['td'],y=ta,name='真の加速度（比較用）'))
         fig.add_trace(go.Scatter(x=r['td'],y=r['ad'],name='学習に用いた加速度',mode='lines+markers'))
         fig.update_layout(height=300,legend=dict(orientation='h'),xaxis_title='時間 [s]',yaxis_title='加速度 [m/s²]')
@@ -305,4 +327,4 @@ def animation():
         st.rerun()
 
 animation()
-st.caption('線形自由振動を対象に、SINDyのSTLSQを体験する教材です。学習した式はRK4で数値積分します。')
+st.caption('線形・二次ばねの自由振動を対象に、SINDyのSTLSQを体験する教材です。学習した式はRK4で数値積分します。')

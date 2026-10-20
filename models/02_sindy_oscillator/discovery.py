@@ -1,7 +1,8 @@
 """Teaching implementation of sequential thresholded least squares (STLSQ)."""
 import math
+from functools import lru_cache
 import numpy as np
-from oscillator import state_at
+from oscillator import state_at as linear_state_at
 
 
 NAMES = ['1', 'x', 'v', 'x²', 'xv', 'v²', 'x³', 'x²v', 'xv²', 'v³']
@@ -17,8 +18,8 @@ def library(x, v, degree):
 
 def records(duration, dt, noise, seed, params):
     t = np.arange(int(np.floor(duration / dt + 1e-9)) + 1) * dt
-    states = np.array([state_at(float(ti), *params) for ti in t])
-    a = -(params[2] * states[:, 1] + params[1] * states[:, 0]) / params[0]
+    states = np.array([true_state_at(float(ti), *params) for ti in t])
+    a = -(params[2] * states[:, 1] + params[1] * states[:, 0] + (params[5] if len(params)>5 else 0.0)*states[:,0]**2) / params[0]
     observed = states[:, 0] + np.random.default_rng(seed).normal(0, noise, len(t))
     return t, states[:, 0], states[:, 1], a, observed
 
@@ -96,3 +97,24 @@ def rollout(times, initial, coef, degree):
                 return output, False
         output[i] = state
     return output, True
+
+
+@lru_cache(maxsize=16)
+def true_path(params):
+    m,k,c,x0,v0,q,duration = params
+    times = np.linspace(0,duration,math.ceil(duration/.005)+1)
+    if q == 0:
+        states = np.array([linear_state_at(float(t),m,k,c,x0,v0) for t in times])
+    else:
+        coef = np.array([0.,-k/m,-c/m,-q/m,0.,0.])
+        states,success = rollout(times,[x0,v0],coef,2)
+        if not success:
+            raise ValueError('この条件では真の二次ばねモデルの運動が非有界となり、計算を継続できません。二次係数・初期変位・初期速度を小さくするか、ばね定数を大きくしてください。')
+    return times,states
+
+
+def true_state_at(t,*params):
+    if len(params)==5 or params[5]==0:
+        return linear_state_at(t,*params[:5])
+    times,states = true_path(tuple(params))
+    return float(np.interp(t,times,states[:,0])),float(np.interp(t,times,states[:,1]))
