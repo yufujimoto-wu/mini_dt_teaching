@@ -183,6 +183,10 @@ def animation():
         st.download_button('計算結果をCSV保存',buf.getvalue().encode('utf-8-sig'),file_name='water_storage.csv',mime='text/csv',key='download_water')
     if was_playing and not ss.playing:st.rerun()
 
+animation()
+#st.caption('授業用の簡略モデル．内部では10秒以下の区間ごとに降雨を一定近似し，2段の線形貯留式を解析的に更新．')
+
+    
 with st.expander('講義資料の式・単位・見方'):
     a,b=st.columns(2)
     a.latex(r'\frac{dS}{dt}=Ar_e-Q_{\mathrm{in}},\qquad Q_{\mathrm{in}}=\frac{S}{\tau_c}')
@@ -200,6 +204,3 @@ st.slider('時刻を指定 [h]（操作すると一時停止）',0.,ss.duration,
 #st.caption('スライダーは時刻指定用です。再生中の現在時刻は数値と縦線で表示します。')
 
     
-animation()
-#st.caption('授業用の簡略モデル．内部では10秒以下の区間ごとに降雨を一定近似し，2段の線形貯留式を解析的に更新．')
-
