@@ -1,73 +1,73 @@
-"""Independent bounded uniform draws; each draw defines one complete trajectory."""
-import math
+"""Fixed uniform marginal samples; change only the pairing of rainfall peaks."""
 import numpy as np
-
-PARAMS=['peak','onset','width','tc','tr','s0','v0']
-
-
-def samples(base, spreads, n, seed):
-    # Drawing rows keeps the first trajectories unchanged when n is increased.
-    z=np.random.default_rng(seed).uniform(-1,1,(n,7))
-    result={}
-    for j,key in enumerate(PARAMS):
-        if key=='onset':result[key]=base[key]+spreads[key]*z[:,j]
-        else:result[key]=base[key]*(1+spreads[key]*z[:,j])
-    return result
+from model import simulate
 
 
-def simulate_ensemble(base,spreads,n,seed,step_s=30):
-    draws=samples(base,spreads,n,seed)
-    end=base['duration']*3600
-    times=np.linspace(0,end,math.ceil(end/step_s)+1)
-    dt=float(times[1]-times[0])
-    tc,tr=draws['tc']*3600,draws['tr']*3600
-    ec,er=np.exp(-dt/tc),np.exp(-dt/tr)
-    delta=1/tr-1/tc
-    kernel=np.empty(n)
-    near=np.abs(delta*dt)<1e-9
-    kernel[near]=er[near]*dt
-    kernel[~near]=er[~near]*np.expm1(delta[~near]*dt)/delta[~near]
-    s=draws['s0']*base['area']*1000
-    v=draws['v0']*10000
-    initial=s+v
-    cumulative_input=np.zeros(n)
-    cumulative_output=np.zeros(n)
-    ss=np.empty((n,len(times)))
-    hh=np.empty_like(ss)
-    ss[:,0],hh[:,0]=s,base['h0']+v/(base['river_area']*10000)
-    for i in range(1,len(times)):
-        tmid=(times[i]+times[i-1])/7200
-        z=(tmid-draws['onset'])/draws['width']
-        rain=draws['peak']*np.maximum(0,1-np.abs(2*z-1))
-        u=base['area']*rain/3.6
-        sn=s*ec+u*tc*(-np.expm1(-dt/tc))
-        vn=v*er+u*tr*(-np.expm1(-dt/tr))+(s/tc-u)*kernel
-        cumulative_input+=u*dt
-        cumulative_output+=s+v+u*dt-sn-vn
-        s,v=sn,vn
-        ss[:,i],hh[:,i]=s,base['h0']+v/(base['river_area']*10000)
-    return dict(t=times/3600,h=hh,s=ss,draws=draws,
-                max_balance=float(np.max(np.abs(s+v-initial-cumulative_input+cumulative_output))))
+def peak_pairs(n,seed,center,spread,target):
+    rng=np.random.default_rng(seed)
+    z1,z2=rng.standard_normal((n,2)).T
+    levels=center*(1+spread*(2*(np.arange(n)+.5)/n-1))
+    rank1=np.argsort(np.argsort(z1))
+    first=levels[rank1]
+    if spread==0 or center==0:
+        return first,first.copy(),None
+    standardized=(rank1-(n-1)/2)/np.sqrt((n*n-1)/12)
+    def pair(r):
+        score=r*z1+np.sqrt(max(0.,1-r*r))*z2
+        ranks=np.argsort(np.argsort(score))
+        corr=float(np.mean(standardized*(ranks-(n-1)/2)/np.sqrt((n*n-1)/12)))
+        return levels[ranks],corr
+    if abs(target)==1:
+        second,corr=pair(target)
+        return first,second,corr
+    # Finite-sample calibration by ranks; the empirical marginals never change.
+    lo,hi=-1.,1.
+    best=None
+    for _ in range(40):
+        mid=(lo+hi)/2
+        second,corr=pair(mid)
+        if best is None or abs(corr-target)<abs(best[1]-target):best=(second,corr)
+        if corr<target:lo=mid
+        else:hi=mid
+    return first,best[0],best[1]
 
 
-def wilson(k,n):
-    z=1.959963984540054
-    p=k/n
-    denom=1+z*z/n
-    center=(p+z*z/(2*n))/denom
-    half=z*math.sqrt(p*(1-p)/n+z*z/(4*n*n))/denom
-    return max(0.,center-half),min(1.,center+half)
+def simulate_two(base,n,seed,rho):
+    p1,p2,corr=peak_pairs(n,seed,base['peak'],base['spread'],rho)
+    profiles=[]
+    for area,tc in [(base['area1'],base['tc1']),(base['area2'],base['tc2'])]:
+        args=dict(area=area*1e6,river_area=base['river_area']*1e4,tc_h=tc,tr_h=base['tr'],h0=0.,s0=base['s0']*area*1000,v0=base['v0']*10000/2,onset=base['onset'],width=base['width'],duration=base['duration'])
+        zero=simulate(peak=0.,**args)
+        unit=simulate(peak=1.,**args)
+        profiles.append((zero,{k:np.asarray(unit[k])-np.asarray(zero[k]) for k in zero if k!='t'}))
+    times=np.asarray(profiles[0][0]['t'])
+    (a0,a1),(b0,b1)=profiles
+    h=base['h0']+np.asarray(a0['h'])[None,:]+np.asarray(b0['h'])[None,:]+p1[:,None]*a1['h']+p2[:,None]*b1['h']
+    return dict(t=times,h=h,p1=p1,p2=p2,corr=corr,profiles=profiles)
 
 
-def values_at(matrix,times,t):
-    idx=int(np.searchsorted(times,t,side='right')-1)
-    idx=max(0,min(idx,len(times)-1))
-    if idx==len(times)-1:return matrix[:,idx],idx
-    alpha=(t-times[idx])/(times[idx+1]-times[idx])
-    return matrix[:,idx]*(1-alpha)+matrix[:,idx+1]*alpha,idx
+def selected_data(result,index,base):
+    data={'t':result['t']}
+    derived=[]
+    for i,(zero,unit) in enumerate(result['profiles']):
+        peak=result['p1' if i==0 else 'p2'][index]
+        derived.append({k:np.asarray(zero[k])+peak*unit[k] for k in unit})
+    a,b=derived
+    data.update(s1=a['s'],s2=b['s'],qin1=a['qin'],qin2=b['qin'],rain1=a['rain'],rain2=b['rain'])
+    for key in ['v','qout','input','output']:data[key]=a[key]+b[key]
+    data['h']=result['h'][index]
+    return data
 
 
-def event_counts(h,times,threshold,horizon):
-    current,idx=values_at(h,times,horizon)
-    maxima=np.maximum(h[:,:idx+1].max(axis=1),current)
-    return int(np.count_nonzero(maxima>threshold)),maxima
+def at(data,t):
+    return {k:float(np.interp(t,data['t'],v)) for k,v in data.items()}
+
+
+def probability(h,times,threshold,horizon):
+    i=min(len(times)-1,max(0,int(np.searchsorted(times,horizon,side='right')-1)))
+    if i<len(times)-1:
+        alpha=(horizon-times[i])/(times[i+1]-times[i])
+        current=h[:,i]*(1-alpha)+h[:,i+1]*alpha
+    else:current=h[:,i]
+    maxima=np.maximum(h[:,:i+1].max(axis=1),current)
+    return float(np.mean(maxima>threshold)),maxima
