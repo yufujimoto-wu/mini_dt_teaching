@@ -12,15 +12,6 @@ ss=st.session_state
 for k,v in DEFAULTS.items():ss.setdefault(k,v)
 for k,v in dict(t=0.,seek=0.,playing=False,anchor=time.monotonic(),rate=1.).items():ss.setdefault(k,v)
 
-buttons=st.columns(4)
-buttons[0].button('▶ 再生',on_click=play,disabled=ss.playing,width='stretch')
-buttons[1].button('⏸ 一時停止',on_click=pause,disabled=not ss.playing,width='stretch')
-buttons[2].button('↶ 先頭に戻る',on_click=restart,width='stretch')
-buttons[3].button('全時間を表示',on_click=show_all,width='stretch')
-st.slider('時刻を指定 [h]（操作すると一時停止）',0.,ss.duration,step=.05,key='seek',on_change=seek)
-#st.caption('スライダーは時刻指定用です。再生中の現在時刻は数値と縦線で表示します。')
-
-
 
 def advance():
     now=time.monotonic()
@@ -58,6 +49,8 @@ def preset(name):
     elif name=='④ 雨がなくても貯留から流れる':ss.peak=0.
     ss.rate=ss.speed;restart()
 
+#st.caption('スライダーは時刻指定用です。再生中の現在時刻は数値と縦線で表示します。')
+    
 with st.sidebar:
     st.header('条件設定')
     st.button('初期設定に戻す',on_click=reset,width='stretch')
@@ -87,6 +80,12 @@ with st.sidebar:
 
 st.title('貯留と流出による水位の時間変化')
 #st.caption('流域と河道をそれぞれ一つの貯留として表す、講義用の確定的なモデルです。')
+buttons=st.columns(4)
+buttons[0].button('▶ 再生',on_click=play,disabled=ss.playing,width='stretch')
+buttons[1].button('⏸ 一時停止',on_click=pause,disabled=not ss.playing,width='stretch')
+buttons[2].button('↶ 先頭に戻る',on_click=restart,width='stretch')
+buttons[3].button('全時間を表示',on_click=show_all,width='stretch')
+st.slider('時刻を指定 [h]（操作すると一時停止）',0.,ss.duration,step=.05,key='seek',on_change=seek)
 
 @st.cache_data(show_spinner=False)
 def calculate(area,river_area,tc,tr,h0,s0,v0,peak,onset,width,duration):
