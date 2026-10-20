@@ -155,7 +155,6 @@ def animation():
         st.markdown(diagram(state),unsafe_allow_html=True)
         change=state['qin']-state['qout']
         st.write('**河道の水位：'+('上昇中**' if change>1e-6 else '低下中**' if change < -1e-6 else 'ほぼ一定**')+f'　流入−流出 = {change:+.2f} m³/s')
-        st.caption('h₀は水位の換算基準（灰色点線）．河道の貯留Vはh₀からの水位増分に対応．')
     with right:
         st.subheader('水位の時間変化')
         # Slice by actual time, including additional rainfall breakpoints.
