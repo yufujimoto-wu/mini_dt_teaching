@@ -276,6 +276,7 @@ def animation():
         st.markdown(cart_svg(x), unsafe_allow_html=True)
         # st.caption(f"台車の表示倍率は初期条件に合わせて調整．同じ再生中は固定．変位の基準範囲：±{limit:.2f} m")
     with right:
+        st.subheader("変位の時間変化")
         stop = min(len(times), int(t / ss.duration * (len(times) - 1)) + 1)
         tx, xx = times[:stop], values[:stop]
         if tx[-1] < t:
@@ -285,7 +286,7 @@ def animation():
         fig.add_trace(go.Scatter(x=[t], y=[x], mode="markers", marker=dict(color="#2563eb", size=8), name="現在位置", showlegend=False))
         fig.add_trace(go.Scatter(x=sensor_t[:observed_n], y=sensor_y[:observed_n], mode="markers", marker=dict(color="#dc2626", symbol="x", size=10, line=dict(width=2)), name="センサ記録"))
         fig.add_vline(x=t, line_color="#94a3b8", line_dash="dot")
-        fig.update_layout(title="変位の時間変化", height=380, margin=dict(l=45, r=15, t=50, b=45), showlegend=True, legend=dict(orientation="h", y=1.15), uirevision="fixed", xaxis=dict(title="時間 t [s]", range=[0, ss.duration], fixedrange=True), yaxis=dict(title="変位 x [m]", range=[-observation_limit, observation_limit], zeroline=True, fixedrange=True))
+        fig.update_layout(height=380, margin=dict(l=45, r=15, t=50, b=45), showlegend=True, legend=dict(orientation="h", y=1.15), uirevision="fixed", xaxis=dict(title="時間 t [s]", range=[0, ss.duration], fixedrange=True), yaxis=dict(title="変位 x [m]", range=[-observation_limit, observation_limit], zeroline=True, fixedrange=True))
         st.plotly_chart(fig, width="stretch", key="displacement", config={"displayModeBar": False})
     st.progress(min(1.0, t / ss.duration))
     st.caption("赤い×は記録周期ごとの観測値．線は連続時間の真の変位でARモデルの学習には赤い×だけを使用．")
