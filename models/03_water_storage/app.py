@@ -67,7 +67,7 @@ with st.sidebar:
     st.slider('流域の初期貯留 S₀（等価水深）[mm]',0.,30.,step=1.,key='s0',on_change=restart)
     st.slider('河道の初期貯留 V₀ [万m³]',0.,20.,step=.5,key='v0',on_change=restart)
     #st.caption('S₀は等価水深×流域面積で水量へ換算。h₀は水位の基準で、初期水位はh₀+V₀/Aᵣです。')
-    st.subheader('有効降雨（三角形の波形）')
+    st.subheader('有効降雨')
     st.slider('ピークの有効降雨強度 [mm/h]',0.,100.,step=5.,key='peak',on_change=restart)
     st.slider('降雨開始時刻 [h]',0.,6.,step=.25,key='onset',on_change=restart)
     st.slider('降雨継続時間 [h]',.5,6.,step=.25,key='width',on_change=restart)
