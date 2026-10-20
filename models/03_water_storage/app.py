@@ -77,21 +77,6 @@ with st.sidebar:
 
 st.title('貯留と流出による水位の時間変化')
 #st.caption('流域と河道をそれぞれ一つの貯留として表す、講義用の確定的なモデルです。')
-with st.expander('講義資料の式・単位・見方'):
-    a,b=st.columns(2)
-    a.latex(r'\frac{dS}{dt}=Ar_e-Q_{\mathrm{in}},\qquad Q_{\mathrm{in}}=\frac{S}{\tau_c}')
-    b.latex(r'\frac{dV}{dt}=Q_{\mathrm{in}}-Q_{\mathrm{out}},\qquad Q_{\mathrm{out}}=\frac{V}{\tau_r}')
-    st.latex(r'h=h_0+\frac{V}{A_r}')
-    st.markdown('''流域の水量Sと河道の水量Vはm³，流量はm³/s，式内の時間は秒．左パネルのkm²・万m²・mm/h・時間は内部で換算．
-
-**流域**は有効降雨によって水が増え，S/τcで河道へ流出．**河道**は流入と下流への流出の差で貯留が変化''')
-buttons=st.columns(4)
-buttons[0].button('▶ 再生',on_click=play,disabled=ss.playing,width='stretch')
-buttons[1].button('⏸ 一時停止',on_click=pause,disabled=not ss.playing,width='stretch')
-buttons[2].button('↶ 先頭に戻る',on_click=restart,width='stretch')
-buttons[3].button('全時間を表示',on_click=show_all,width='stretch')
-st.slider('時刻を指定 [h]（操作すると一時停止）',0.,ss.duration,step=.05,key='seek',on_change=seek)
-#st.caption('スライダーは時刻指定用です。再生中の現在時刻は数値と縦線で表示します。')
 
 @st.cache_data(show_spinner=False)
 def calculate(area,river_area,tc,tr,h0,s0,v0,peak,onset,width,duration):
@@ -198,5 +183,23 @@ def animation():
         st.download_button('計算結果をCSV保存',buf.getvalue().encode('utf-8-sig'),file_name='water_storage.csv',mime='text/csv',key='download_water')
     if was_playing and not ss.playing:st.rerun()
 
+with st.expander('講義資料の式・単位・見方'):
+    a,b=st.columns(2)
+    a.latex(r'\frac{dS}{dt}=Ar_e-Q_{\mathrm{in}},\qquad Q_{\mathrm{in}}=\frac{S}{\tau_c}')
+    b.latex(r'\frac{dV}{dt}=Q_{\mathrm{in}}-Q_{\mathrm{out}},\qquad Q_{\mathrm{out}}=\frac{V}{\tau_r}')
+    st.latex(r'h=h_0+\frac{V}{A_r}')
+    st.markdown('''流域の水量Sと河道の水量Vはm³，流量はm³/s，式内の時間は秒．左パネルのkm²・万m²・mm/h・時間は内部で換算．
+
+**流域**は有効降雨によって水が増え，S/τcで河道へ流出．**河道**は流入と下流への流出の差で貯留が変化''')
+buttons=st.columns(4)
+buttons[0].button('▶ 再生',on_click=play,disabled=ss.playing,width='stretch')
+buttons[1].button('⏸ 一時停止',on_click=pause,disabled=not ss.playing,width='stretch')
+buttons[2].button('↶ 先頭に戻る',on_click=restart,width='stretch')
+buttons[3].button('全時間を表示',on_click=show_all,width='stretch')
+st.slider('時刻を指定 [h]（操作すると一時停止）',0.,ss.duration,step=.05,key='seek',on_change=seek)
+#st.caption('スライダーは時刻指定用です。再生中の現在時刻は数値と縦線で表示します。')
+
+    
 animation()
 #st.caption('授業用の簡略モデル．内部では10秒以下の区間ごとに降雨を一定近似し，2段の線形貯留式を解析的に更新．')
+
