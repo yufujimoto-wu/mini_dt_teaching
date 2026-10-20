@@ -12,6 +12,16 @@ ss=st.session_state
 for k,v in DEFAULTS.items():ss.setdefault(k,v)
 for k,v in dict(t=0.,seek=0.,playing=False,anchor=time.monotonic(),rate=1.).items():ss.setdefault(k,v)
 
+buttons=st.columns(4)
+buttons[0].button('▶ 再生',on_click=play,disabled=ss.playing,width='stretch')
+buttons[1].button('⏸ 一時停止',on_click=pause,disabled=not ss.playing,width='stretch')
+buttons[2].button('↶ 先頭に戻る',on_click=restart,width='stretch')
+buttons[3].button('全時間を表示',on_click=show_all,width='stretch')
+st.slider('時刻を指定 [h]（操作すると一時停止）',0.,ss.duration,step=.05,key='seek',on_change=seek)
+#st.caption('スライダーは時刻指定用です。再生中の現在時刻は数値と縦線で表示します。')
+
+
+
 def advance():
     now=time.monotonic()
     if ss.playing:
@@ -189,13 +199,6 @@ def animation():
         st.markdown('''流域の水量Sと河道の水量Vはm³，流量はm³/s，式内の時間は秒．左パネルのkm²・万m²・mm/h・時間は内部で換算．
 
 **流域**は有効降雨によって水が増え，S/τcで河道へ流出．**河道**は流入と下流への流出の差で貯留が変化''')
-        buttons=st.columns(4)
-        buttons[0].button('▶ 再生',on_click=play,disabled=ss.playing,width='stretch')
-        buttons[1].button('⏸ 一時停止',on_click=pause,disabled=not ss.playing,width='stretch')
-        buttons[2].button('↶ 先頭に戻る',on_click=restart,width='stretch')
-        buttons[3].button('全時間を表示',on_click=show_all,width='stretch')
-        st.slider('時刻を指定 [h]（操作すると一時停止）',0.,ss.duration,step=.05,key='seek',on_change=seek)
-        #st.caption('スライダーは時刻指定用です。再生中の現在時刻は数値と縦線で表示します。')
     if was_playing and not ss.playing:st.rerun()
 
 animation()
