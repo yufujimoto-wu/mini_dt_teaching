@@ -3,14 +3,11 @@ import time
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
-from model import at
-import numpy as np
-import pandas as pd
-from ensemble import simulate_ensemble, values_at, event_counts, wilson, PARAMS
+from model import simulate, at
 
-st.set_page_config(page_title='モンテカルロ法による水位予測',layout='wide')
+st.set_page_config(page_title='貯留と流出による水位変化',layout='wide')
 st.markdown('<style>.block-container{padding-top:1.3rem}div[data-testid="stMetricValue"]{font-size:1.6rem}</style>',unsafe_allow_html=True)
-DEFAULTS=dict(area=5.0,river_area=5.0,tc=.8,tr=.5,h0=.5,s0=5.0,v0=2.5,peak=40.,onset=.5,width=2.,duration=6.,threshold=1.4,speed=1.,n=200,seed=42,peak_spread=.3,onset_spread=.3,width_spread=.2,tc_spread=.3,tr_spread=.3,initial_spread=0.,member=1,draw_count=30,horizon=3.)
+DEFAULTS=dict(area=5.0,river_area=5.0,tc=.8,tr=.5,h0=.5,s0=5.0,v0=2.5,peak=40.,onset=.5,width=2.,duration=6.,threshold=1.4,speed=1.)
 ss=st.session_state
 for k,v in DEFAULTS.items():ss.setdefault(k,v)
 for k,v in dict(t=0.,seek=0.,playing=False,anchor=time.monotonic(),rate=1.).items():ss.setdefault(k,v)
@@ -24,7 +21,6 @@ def advance():
     ss.anchor=now
 
 def restart():
-    ss.horizon=min(ss.horizon,ss.duration)
     ss.t,ss.seek,ss.playing,ss.anchor=0.,0.,False,time.monotonic()
 
 def reset():
@@ -48,18 +44,18 @@ def show_all():
 
 def preset(name):
     ss.update(DEFAULTS)
-    if name=='① ばらつきなし':
-        for key in ['peak_spread','onset_spread','width_spread','tc_spread','tr_spread','initial_spread']:ss[key]=0.
-    elif name=='② 降雨だけにばらつき':
-        ss.tc_spread=ss.tr_spread=0.
-    elif name=='④ 標本数を増やす':ss.n=1000
+    if name=='② 流域からゆっくり流出':ss.tc=2.
+    elif name=='③ 河道から抜けにくい':ss.tr=1.5
+    elif name=='④ 雨がなくても貯留から流れる':ss.peak=0.
     ss.rate=ss.speed;restart()
 
+#st.caption('スライダーは時刻指定用です。再生中の現在時刻は数値と縦線で表示します。')
+    
 with st.sidebar:
     st.header('条件設定')
     st.button('初期設定に戻す',on_click=reset,width='stretch')
     with st.expander('授業用の設定例'):
-        for name in ['① ばらつきなし','② 降雨だけにばらつき','③ 降雨と時定数にばらつき','④ 標本数を増やす']:
+        for name in ['① 降雨から水位への遅れ','② 流域からゆっくり流出','③ 河道から抜けにくい','④ 雨がなくても貯留から流れる']:
             st.button(name,on_click=preset,args=(name,),width='stretch')
     st.subheader('流域・河道のパラメータ')
     st.slider('流域面積 A [km²]',.5,20.,step=.5,key='area',on_change=restart)
@@ -76,28 +72,13 @@ with st.sidebar:
     st.slider('降雨開始時刻 [h]',0.,6.,step=.25,key='onset',on_change=restart)
     st.slider('降雨継続時間 [h]',.5,6.,step=.25,key='width',on_change=restart)
     #st.caption('降雨開始から継続時間の半分でピークに達し、その後0へ戻ります。流出に寄与する有効降雨を直接与えます。')
-    st.subheader('モンテカルロ法の設定')
-    st.select_slider('サンプル数 N',options=[50,100,200,500,1000],key='n',on_change=restart)
-    st.number_input('乱数シード',min_value=0,max_value=999999,step=1,key='seed',on_change=restart)
-    st.slider('降雨ピークのばらつき ±割合',0.,.8,step=.05,key='peak_spread',on_change=restart)
-    st.slider('降雨開始時刻のずれ ±時間 [h]',0.,1.,step=.1,key='onset_spread',on_change=restart)
-    st.slider('降雨継続時間のばらつき ±割合',0.,.8,step=.05,key='width_spread',on_change=restart)
-    st.slider('流域の時定数 τc のばらつき ±割合',0.,.8,step=.05,key='tc_spread',on_change=restart)
-    st.slider('河道の時定数 τr のばらつき ±割合',0.,.8,step=.05,key='tr_spread',on_change=restart)
-    st.slider('初期貯留 S₀・V₀ のばらつき ±割合',0.,.8,step=.05,key='initial_spread',on_change=restart)
-    st.caption('中心値の±指定割合の一様分布。0.30なら中心値の70〜130%。開始時刻は±指定時間。各変数は独立に抽出します。')
-    if ss.member>ss.n:ss.member=1
-    st.number_input('模式図に表示するシナリオ番号',min_value=1,max_value=ss.n,step=1,key='member')
-    st.select_slider('細線で描くサンプル数',options=[10,30,50,100],key='draw_count')
     st.subheader('表示と再生')
     st.slider('表示する基準水位 [m]',.5,10.,step=.1,key='threshold')
     st.slider('計算時間 [h]',3.,12.,step=1.,key='duration',on_change=restart)
-    st.slider('期間超過確率の評価終了時刻 [h]',.5,ss.duration,step=.5,key='horizon')
     st.select_slider('再生速度',options=[.25,.5,1.,2.,4.],key='speed',on_change=speed_change,format_func=lambda x:f'{x:g} 倍')
     #st.caption('1倍ではモデルの1時間を約20秒で再生。表示基準以外のモデル条件を変えると時刻0へ戻ります。')
 
-st.title('モンテカルロ法による水位予測')
-st.caption('降雨・初期貯留・時定数をサンプルごとに変え、複数の水位の未来を同時に計算します。再生は計算済みの時間軌跡の表示で、観測による予測更新は行いません。')
+st.title('貯留と流出による水位の時間変化')
 #st.caption('流域と河道をそれぞれ一つの貯留として表す、講義用の確定的なモデルです。')
 buttons=st.columns(4)
 buttons[0].button('▶ 再生',on_click=play,disabled=ss.playing,width='stretch')
@@ -106,34 +87,16 @@ buttons[2].button('↶ 先頭に戻る',on_click=restart,width='stretch')
 buttons[3].button('全時間を表示',on_click=show_all,width='stretch')
 st.slider('時刻を指定 [h]（操作すると一時停止）',0.,ss.duration,step=.05,key='seek',on_change=seek)
 
-BASE_KEYS=['area','river_area','tc','tr','h0','s0','v0','peak','onset','width','duration']
-base={key:ss[key] for key in BASE_KEYS}
-spreads=dict(peak=ss.peak_spread,onset=ss.onset_spread,width=ss.width_spread,tc=ss.tc_spread,tr=ss.tr_spread,s0=ss.initial_spread,v0=ss.initial_spread)
+@st.cache_data(show_spinner=False)
+def calculate(area,river_area,tc,tr,h0,s0,v0,peak,onset,width,duration):
+    return simulate(area*1e6,river_area*1e4,tc,tr,h0,s0*area*1000,v0*1e4,peak,onset,width,duration)
 
-@st.cache_data(show_spinner=False,max_entries=4)
-def calculate(base,spreads,n,seed):
-    return simulate_ensemble(base,spreads,n,seed)
-
-with st.spinner('複数の水位軌跡を計算しています…'):
-    ensemble=calculate(base,spreads,ss.n,ss.seed)
-times=ensemble['t'];heights=ensemble['h']
-selected=ss.member-1
-sample={key:float(ensemble['draws'][key][selected]) for key in PARAMS}
-volumes=(heights[selected]-ss.h0)*ss.river_area*10000
-z=(times-sample['onset'])/sample['width']
-data=dict(t=times,s=ensemble['s'][selected],v=volumes,h=heights[selected],rain=sample['peak']*np.maximum(0,1-np.abs(2*z-1)),qin=ensemble['s'][selected]/(sample['tc']*3600),qout=volumes/(sample['tr']*3600))
+data=calculate(ss.area,ss.river_area,ss.tc,ss.tr,ss.h0,ss.s0,ss.v0,ss.peak,ss.onset,ss.width,ss.duration)
 area=ss.area*1e6
-smax=max(1.,float(ensemble['s'].max())/area*1000*1.15)
-hmax=max(ss.threshold*1.15,float(heights.max())*1.15,ss.h0+.5)
-flowmax=max(1.,float(data['qin'].max()),float(data['qout'].max()),ss.area*sample['peak']/3.6)
-low,median,high=np.quantile(heights,[.05,.5,.95],axis=0)
-mean=heights.mean(axis=0)
-instant_prob=(heights>ss.threshold).mean(axis=0)
-cumulative_prob=(np.maximum.accumulate(heights,axis=1)>ss.threshold).mean(axis=0)
-window_count,maxima=event_counts(heights,times,ss.threshold,ss.horizon)
-ci=wilson(window_count,ss.n)
-st.info(f'予測開始から {ss.horizon:g} 時間までに一度でも基準を超える割合：{window_count/ss.n:.1%}（{window_count}/{ss.n} 本）')
-st.caption(f'MC標本誤差の95%区間（Wilson）：{ci[0]:.1%}〜{ci[1]:.1%}。仮定した入力分布・モデルの誤りは含みません。超過は h > {ss.threshold:g} m として計算します。')
+smax=max(1.,max(data['s'])/area*1000*1.15)
+hmax=max(ss.threshold*1.15,max(data['h'])*1.15,ss.h0+.5)
+flowmax=max(1.,max(data['qin']),max(data['qout']),ss.area*ss.peak/3.6)
+#if ss.onset>=ss.duration:st.info('降雨開始が計算期間の外にあります。この区間では初期貯留からの流出だけを表示します。')
 
 
 def diagram(state):
@@ -176,88 +139,69 @@ def diagram(state):
     </svg>'''
 
 
-@st.fragment(run_every=.15 if ss.playing else None)
+@st.fragment(run_every=.1 if ss.playing else None)
 def animation():
     was_playing=ss.playing
     advance()
     state=at(data,ss.t)
-    now_h,idx=values_at(heights,times,ss.t)
-    past_count,_=event_counts(heights,times,ss.threshold,ss.t)
     metrics=st.columns(4)
-    metrics[0].metric('再生時刻',f'{ss.t:.2f} h')
-    metrics[1].metric('この時刻の平均水位',f'{now_h.mean():.2f} m')
-    metrics[2].metric('この時刻で超過する割合',f'{np.mean(now_h>ss.threshold):.1%}')
-    metrics[3].metric('再生時刻までに一度でも超過',f'{past_count/ss.n:.1%}')
+    metrics[0].metric('現在の時刻',f'{ss.t:.2f} h')
+    metrics[1].metric('対象地点の水位 h',f"{state['h']:.2f} m")
+    metrics[2].metric('河道への流入 Qᵢₙ',f"{state['qin']:.2f} m³/s")
+    metrics[3].metric('下流への流出 Qₒᵤₜ',f"{state['qout']:.2f} m³/s")
     left,right=st.columns([1.1,1.])
     with left:
-        st.subheader(f'シナリオ {ss.member} の貯留')
+        st.subheader('流域から河道へ水がたまる様子')
         st.markdown(diagram(state),unsafe_allow_html=True)
-        st.caption(f'模式図は平均ではなく選択した1本です。橙色の線と対応します。現在の水位 {state["h"]:.2f} m。')
-        st.caption(f'このシナリオの降雨ピーク {sample["peak"]:.1f} mm/h、開始 {sample["onset"]:.2f} h、継続 {sample["width"]:.2f} h、τc {sample["tc"]:.2f} h、τr {sample["tr"]:.2f} h。')
-    n=idx+1
-    tt=np.r_[times[:n],ss.t]
-    def until(values):return np.r_[values[:n],np.interp(ss.t,times,values)]
+        change=state['qin']-state['qout']
+        st.write('**河道の水位：'+('上昇中**' if change>1e-6 else '低下中**' if change < -1e-6 else 'ほぼ一定**')+f'　流入−流出 = {change:+.2f} m³/s')
+        st.caption('h₀は水位の換算基準（灰色点線）．河道の貯留Vはh₀からの水位増分に対応．')
     with right:
-        st.subheader('複数の水位予測')
-        fig=go.Figure()
-        fig.add_trace(go.Scatter(x=tt,y=until(low),mode='lines',line=dict(width=0),showlegend=False,hoverinfo='skip'))
-        fig.add_trace(go.Scatter(x=tt,y=until(high),mode='lines',line=dict(width=0),fill='tonexty',fillcolor='rgba(37,99,235,0.17)',name='各時刻の5–95%帯'))
-        drawn=min(ss.draw_count,ss.n)
-        # All N samples enter probabilities, even when only a subset is rendered.
-        for i in range(drawn):
-            fig.add_trace(go.Scatter(x=tt,y=np.r_[heights[i,:n],now_h[i]],mode='lines',line=dict(color='rgba(59,130,246,.20)',width=1),showlegend=False,hoverinfo='skip'))
-        fig.add_trace(go.Scatter(x=tt,y=until(mean),name='平均水位',line=dict(color='#1d4ed8',width=3)))
-        fig.add_trace(go.Scatter(x=tt,y=np.r_[heights[selected,:n],now_h[selected]],name=f'シナリオ {ss.member}',line=dict(color='#ea580c',width=2)))
-        fig.add_hline(y=ss.threshold,line_color='#dc2626',line_dash='dash')
+        st.subheader('水位の時間変化')
+        # Slice by actual time, including additional rainfall breakpoints.
+        import bisect
+        n=bisect.bisect_right(data['t'],ss.t)
+        tt=data['t'][:n]+[ss.t];hh=data['h'][:n]+[state['h']]
+        fig=go.Figure(go.Scatter(x=tt,y=hh,name='水位 h',mode='lines',line=dict(color='#2563eb',width=3)))
+        fig.add_trace(go.Scatter(x=[ss.t],y=[state['h']],name='現在',mode='markers',marker=dict(size=9,color='#2563eb'),showlegend=False))
+        fig.add_hline(y=ss.threshold,line_color='#dc2626',line_dash='dash',annotation_text='基準水位',annotation_position='top right')
         fig.add_vline(x=ss.t,line_color='#94a3b8',line_dash='dot')
-        fig.update_layout(height=370,margin=dict(t=65,l=45,r=15,b=45),legend=dict(orientation='h',y=1.04,yanchor='bottom',font=dict(size=11)),uirevision='mc',xaxis=dict(title='予測開始からの時間 [h]',range=[0,ss.duration],fixedrange=True),yaxis=dict(title='水位 [m]',range=[0,hmax],fixedrange=True))
-        st.plotly_chart(fig,width='stretch',key='water_mc',config={'displayModeBar':False})
+        fig.update_layout(height=340,margin=dict(t=45,l=45,r=15,b=45),legend=dict(orientation='h',y=1.02,yanchor='bottom'),uirevision='water',xaxis=dict(title='時間 [h]',range=[0,ss.duration],fixedrange=True),yaxis=dict(title='水位 [m]',range=[0,hmax],fixedrange=True))
+        st.plotly_chart(fig,width='stretch',key='water_level',config={'displayModeBar':False})
     st.progress(min(1.,ss.t/ss.duration))
-    st.caption(f'細線は {drawn} 本、確率の計算には全 {ss.n} 本を使用。帯は各時刻の分位点で、軌跡全体の90%を覆う保証や平均値の信頼区間ではありません。')
-    st.subheader('基準水位の超過確率')
-    fig=go.Figure()
-    fig.add_trace(go.Scatter(x=times[:n],y=instant_prob[:n]*100,name='各時刻で超過',line=dict(color='#2563eb',width=3)))
-    fig.add_trace(go.Scatter(x=times[:n],y=cumulative_prob[:n]*100,name='その時刻までに一度でも超過',line=dict(color='#dc2626',width=3)))
-    fig.add_vline(x=ss.horizon,line_color='#64748b',line_dash='dot',annotation_text='評価終了時刻')
-    fig.update_layout(height=260,margin=dict(t=55,b=40),legend=dict(orientation='h',y=1.05,yanchor='bottom'),xaxis=dict(title='予測開始からの時間 [h]',range=[0,ss.duration]),yaxis=dict(title='超過する割合 [%]',range=[0,105]))
-    st.plotly_chart(fig,width='stretch',key='exceedance')
-    st.caption('赤線は一度超えたシナリオをその後も数えるので下がりません。「期間中に一度でも超える確率」は、各時刻の超過確率の最大値とは異なります。再生に伴い新しい観測を条件とした予測へ更新しているわけではありません。')
-    with st.expander('有効降雨・流量・貯留量の推移（選択シナリオ）'):
+    if state['h']>=ss.threshold:st.info('現在の水位が表示基準以上．')
+    else:st.caption(f"表示基準まで {ss.threshold-state['h']:.2f} m")
+    with st.expander('有効降雨・流量・貯留量の推移'):
         fig=make_subplots(rows=3,cols=1,shared_xaxes=True,vertical_spacing=.09,subplot_titles=['有効降雨','河道への流入と下流への流出','流域と河道の貯留水量'])
         for row,keys,names,colors in [(1,['rain'],['有効降雨'],['#0284c7']),(2,['qin','qout'],['Qᵢₙ','Qₒᵤₜ'],['#16a34a','#9333ea']),(3,['s','v'],['流域 S','河道 V'],['#16a34a','#9333ea'])]:
             for key,name,color in zip(keys,names,colors):
-                vals=until(data[key])/(10000 if row==3 else 1)
-                fig.add_trace(go.Scatter(x=tt,y=vals,name=name,line=dict(color=color)),row=row,col=1)
+                yy=data[key][:n]+[state[key]]
+                if row==3:yy=[v/10000 for v in yy]
+                fig.add_trace(go.Scatter(x=tt,y=yy,name=name,line=dict(color=color)),row=row,col=1)
         for row,unit in [(1,'mm/h'),(2,'m³/s'),(3,'万m³')]:fig.update_yaxes(title_text=unit,row=row,col=1)
         fig.update_xaxes(range=[0,ss.duration]);fig.update_xaxes(title_text='時間 [h]',row=3,col=1)
         fig.update_layout(height=620,margin=dict(t=60),legend=dict(orientation='h',y=1.08))
         st.plotly_chart(fig,width='stretch',key='diagnostics')
-    with st.expander('抽出したパラメータ・期間内最高水位・データ保存'):
-        params=pd.DataFrame(ensemble['draws'])
-        params.insert(0,'scenario',np.arange(1,ss.n+1))
-        params['max_h_in_window_m']=maxima
-        params['exceeded']=maxima>ss.threshold
-        st.dataframe(params,hide_index=True)
-        st.caption('peak:mm/h、onset/width/tc/tr:h、s0:等価水深mm、v0:万m³。max_h_in_window_mは予測開始から評価終了時刻までの最大水位です。')
-        st.download_button('シナリオと期間超過の結果をCSV保存',params.to_csv(index=False).encode('utf-8-sig'),file_name='mc_scenarios.csv',mime='text/csv',key='download_samples')
-        summary=pd.DataFrame(dict(time_h=times,mean_h_m=mean,median_h_m=median,q05_h_m=low,q95_h_m=high,instant_exceedance=instant_prob,cumulative_exceedance=cumulative_prob))
-        st.download_button('水位分布・超過確率の時系列をCSV保存',summary.to_csv(index=False).encode('utf-8-sig'),file_name='mc_summary.csv',mime='text/csv',key='download_summary')
-        st.caption('CSVには計算期間全体の結果を保存します。水収支残差の最大値：'+f'{ensemble["max_balance"]:.2e} m³')
+        st.caption(f"現在までの累積有効降雨量：{state['input']/10000:.3f} 万m³ ／ 累積下流流出量：{state['output']/10000:.3f} 万m³．水収支の数値残差：{state['balance']:.2e} m³")
+    if ss.t>=ss.duration:
+        peak_index=max(range(len(data['h'])),key=lambda i:data['h'][i])
+        st.write(f"計算期間内の最高水位：**{data['h'][peak_index]:.2f} m**（時刻 {data['t'][peak_index]:.2f} h）")
+        import csv,io
+        buf=io.StringIO();writer=csv.writer(buf);writer.writerow(['time_h','catchment_storage_m3','river_storage_m3','water_level_m','effective_rain_mm_h','qin_m3_s','qout_m3_s'])
+        writer.writerows(zip(*(data[k] for k in ['t','s','v','h','rain','qin','qout'])))
+        st.download_button('計算結果をCSV保存',buf.getvalue().encode('utf-8-sig'),file_name='water_storage.csv',mime='text/csv',key='download_water')
     with st.expander('講義資料の式・単位・見方'):
         a,b=st.columns(2)
-        a.latex(r'\frac{dS}{dt}=Ar_e-Q_{\mathrm{in}},\quad Q_{\mathrm{in}}=\frac{S}{\tau_c}')
-        b.latex(r'\frac{dV}{dt}=Q_{\mathrm{in}}-Q_{\mathrm{out}},\quad Q_{\mathrm{out}}=\frac{V}{\tau_r}')
+        a.latex(r'\frac{dS}{dt}=Ar_e-Q_{\mathrm{in}},\qquad Q_{\mathrm{in}}=\frac{S}{\tau_c}')
+        b.latex(r'\frac{dV}{dt}=Q_{\mathrm{in}}-Q_{\mathrm{out}},\qquad Q_{\mathrm{out}}=\frac{V}{\tau_r}')
         st.latex(r'h=h_0+\frac{V}{A_r}')
-        st.latex(r'\widehat p_T=\frac{1}{N}\sum_{i=1}^{N}\mathbf{1}\!\left\{\max_{0\le t\le T}h^{(i)}(t)>h_{\mathrm{crit}}\right\}')
-        st.markdown('''S,Vはm³、流量はm³/s。内部では秒で計算します。各サンプルでパラメータを一度抽出し、時刻を通じて一貫した三角形の有効降雨と同じパラメータを使います。
+        st.markdown('''流域の水量Sと河道の水量Vはm³，流量はm³/s，式内の時間は秒．左パネルのkm²・万m²・mm/h・時間は内部で換算．
 
-ばらつきは中心値±指定幅の独立な一様分布です。幅は標準偏差ではありません。開始時刻が負なら予測開始前から雨が降っているシナリオです。初期貯留は別に指定した分布から与え、過去の雨から逆算しません。
-
-描画する本数と計算する本数は別です。同じシードなら再生・再描画でサンプルは変わりません。Nを増やしたときも先頭のサンプルは同じです。
-
-超過判定は30秒刻みの数値軌跡に基づきます。標本誤差と時間離散化の誤差があり、0%や100%も真の確率の断定ではありません。分布の仮定、変数間の独立性、モデルの妥当性は別途検証が必要です。
-
-灰色点線はh₀。水色の貯留Vはh₀からの水位増分に対応します。潮位・背水・氾濫は対象外です。''')
+**流域**は有効降雨によって水が増え，S/τcで河道へ流出．**河道**は流入と下流への流出の差で貯留が変化''')
     if was_playing and not ss.playing:st.rerun()
 
 animation()
+#st.caption('授業用の簡略モデル．内部では10秒以下の区間ごとに降雨を一定近似し，2段の線形貯留式を解析的に更新．')
+
+    
+    
