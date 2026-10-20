@@ -142,7 +142,6 @@ def diagram(state):
     <text x="590" y="335" text-anchor="middle" font-size="18" fill="#6b21a8">V = {state['v']/10000:.2f} 万m³</text>
     <text x="590" y="362" text-anchor="middle" font-size="19" fill="#075985">h = {state['h']:.2f} m</text>
     <text x="765" y="265" text-anchor="middle" font-size="18" fill="#475569">下流へ</text>
-#    <text x="425" y="393" text-anchor="middle" font-size="15" fill="#64748b">左右は異なる尺度。水面の表示倍率と流量矢印の尺度は再生中固定。</text>
     </svg>'''
 
 
