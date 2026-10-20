@@ -91,7 +91,7 @@ with st.sidebar:
     with st.expander("授業用の設定例"):
         for name in ["良好な観測", "過学習を比較", "信号がノイズに埋もれる"]:
             st.button(name, on_click=preset, args=(name,), width="stretch")
-        st.caption("設定例を選んだ後、再生するか「全時間を記録」を押してください。結果は観測条件と乱数に依存します。")
+        #st.caption("設定例を選んだ後，再生か「全時間を記録」を選択．結果は観測条件と乱数に依存．")
     st.subheader("物理パラメータ")
     st.slider("質量 m [kg]", 0.2, 10.0, step=0.1, key="m", on_change=restart)
     st.slider("ばね定数 k [N/m]", 0.2, 40.0, step=0.2, key="k", on_change=restart)
@@ -103,7 +103,7 @@ with st.sidebar:
     st.select_slider("記録周期 Δt [s]", options=[0.05, 0.1, 0.15, 0.2, 0.3, 0.5, 0.8, 1.0, 1.5, 2.0], key="sensor_dt", on_change=restart)
     st.slider("観測誤差の標準偏差 σ [m]", 0.0, 0.5, step=0.005, key="noise", on_change=restart)
     st.number_input("乱数シード", min_value=0, max_value=999999, step=1, key="seed", on_change=restart)
-    st.caption("観測値 = 真の変位 + 独立な正規乱数。シードを固定すると、同じ条件では同じ記録になります。")
+    st.caption("観測値 = 真の変位 + 独立な正規乱数．")
     st.subheader("ARモデルの学習")
     st.slider("学習に使う記録の割合", 0.4, 0.8, step=0.05, key="train_fraction", on_change=clear_model)
     st.slider("候補の最大次数", 2, 20, step=1, key="max_order", on_change=clear_model)
@@ -157,7 +157,7 @@ if zeta < 1:
     damped_period = 2 * math.pi / (math.sqrt(ss.k / ss.m) * math.sqrt(1 - zeta ** 2))
     st.caption(f"減衰振動の1周期あたりの記録数：約 {damped_period / ss.sensor_dt:.1f} 点")
     if ss.sensor_dt >= damped_period / 2:
-        st.info("記録周期が振動周期の半分以上です。標本化によって元の振動と異なる動きに見える可能性があります。")
+        st.info("記録周期が振動周期の半分以上．標本化によって元の振動と異なる動きに見える可能性．")
 
 
 def cart_svg(x):
@@ -171,7 +171,7 @@ def cart_svg(x):
         points.append((px, 128 + (13 if i % 2 else -13)))
     points.extend([(spring_end, 128), (left, 128)])
     poly = " ".join(f"{px:.2f},{py:.2f}" for px, py in points)
-    return f'''<svg viewBox="0 0 800 300" width="100%" role="img" aria-label="ばねとダンパにつながれた台車。変位 {x:.3f} メートル">
+    return f'''<svg viewBox="0 0 800 300" width="100%" role="img" aria-label="ばねとダンパにつながれた台車．変位 {x:.3f} メートル">
     <rect width="800" height="300" rx="12" fill="#f7f9fc"/>
     <line x1="45" y1="237" x2="765" y2="237" stroke="#64748b" stroke-width="5"/>
     <rect x="70" y="60" width="25" height="177" fill="#64748b"/>
@@ -196,8 +196,8 @@ def show_ar_report(report):
     result, chosen = report['result'], report['chosen']
     ts, y, truth = report['times'], report['y'], report['truth']
     split, start, p = result['split'], result['start'], chosen['p']
-    st.write(f"**AR({p})** を採用：{report['method']}　／　記録 {len(y)} 点、学習 {split} 点、検証 {len(y)-split} 点")
-    st.caption(f"Δt = {report['dt']:g} s。候補次数 0〜{result['pmax']}（データ数に応じて上限を調整）。全候補を同じ {split-start} 個の目的値で学習・比較します。")
+    st.write(f"**AR({p})** を採用：{report['method']}　／　記録 {len(y)} 点，学習 {split} 点，検証 {len(y)-split} 点")
+    st.caption(f"Δt = {report['dt']:g} s．候補次数 0〜{result['pmax']}（データ数に応じて上限を調整）．全候補を同じ {split-start} 個の目的値で学習・比較します．")
     st.latex(r"y_n=x(n\Delta t)+\varepsilon_n,\qquad \varepsilon_n\sim\mathcal{N}(0,\sigma^2)")
     st.latex(r"\widehat{y}_n=b+\sum_{j=1}^{p}a_j y_{n-j}")
     bias = float(chosen['coef'][0]) if report['intercept'] else 0.0
@@ -209,16 +209,16 @@ def show_ar_report(report):
     chunks = [' + '.join(terms[i:i+2]) for i in range(0, len(terms), 2)]
     lines = [r"\widehat{y}_n &= " + chunks[0]] + [r'&\quad + ' + x for x in chunks[1:]]
     st.latex(r"\begin{aligned}" + r" \\ ".join(lines) + r"\end{aligned}")
-    if p == 0:
-        st.info("AR(0)は過去の変位を使いません。切片なしなら常に0、切片ありなら学習した定数を予測します。単純なモデルが選ばれても、元の運動が単純だと確定したわけではありません。")
-    if not report['intercept']:
-        st.caption("平衡位置が既知なので切片 b = 0 に固定しています。表示式の係数は丸めており、計算には丸める前の値を使います。")
+#    if p == 0:
+        #st.info("AR(0)は過去の変位を未使用．切片なしなら常に0，切片ありなら学習した定数を予測．単純なモデルが選ばれても、元の運動が単純だと確定したわけではありません。")
+#    if not report['intercept']:
+#        st.caption("平衡位置が既知なので切片 b = 0 に固定しています。表示式の係数は丸めており、計算には丸める前の値を使います。")
     metrics = st.columns(4)
     metrics[0].metric("学習 RMSE", f"{chosen['train_rmse']:.4g} m")
     metrics[1].metric("検証：1ステップ RMSE", f"{chosen['validation_rmse']:.4g} m")
     metrics[2].metric("検証：連続予測 RMSE", f"{chosen['recursive_rmse']:.4g} m")
     metrics[3].metric("検証：ゼロ予測 RMSE", f"{rmse(y[split:], np.zeros(len(y)-split)):.4g} m")
-    st.caption("上の誤差はセンサ記録に対する値です。連続予測は検証中の観測値を入力しません。")
+#    st.caption("上の誤差はセンサ記録に対する値です。連続予測は検証中の観測値を入力しません。")
     fig = go.Figure()
     boundary = (float(ts[split-1]) + float(ts[split])) / 2
     fig.add_vrect(x0=0, x1=boundary, fillcolor='#dbeafe', opacity=0.4, line_width=0, annotation_text='学習区間', annotation_position='top left')
@@ -233,8 +233,8 @@ def show_ar_report(report):
     scale = max(0.1, float(np.max(np.abs(y))), float(np.max(np.abs(truth)))) * 1.3
     fig.update_layout(height=440, margin=dict(t=120, b=45), legend=dict(orientation='h', y=1.38), xaxis_title='時間 t [s]', yaxis_title='変位 [m]', yaxis_range=[-scale, scale])
     st.plotly_chart(fig, width="stretch", key='ar_prediction')
-    if not np.all(np.isfinite(chosen['recursive'])) or np.any(np.abs(chosen['recursive']) > scale):
-        st.warning("連続予測が表示範囲を超えています。観測値が見えるよう縦軸を固定しています。予測の発散・振幅増大は誤差指標と下の表でも確認できます。")
+ #   if not np.all(np.isfinite(chosen['recursive'])) or np.any(np.abs(chosen['recursive']) > scale):
+ #       st.warning("連続予測が表示範囲を超えています。観測値が見えるよう縦軸を固定しています。予測の発散・振幅増大は誤差指標と下の表でも確認できます。")
     truth_error = rmse(truth[split:], chosen['recursive'])
     st.caption(f"参考：仮想実験でのみ分かる『真の変位』に対する連続予測 RMSE = {truth_error:.4g} m。真の変位は学習・次数選択に使っていません。")
     rows = result['rows']
@@ -244,16 +244,16 @@ def show_ar_report(report):
     scores.add_vline(x=p, line_dash='dot', line_color='#64748b')
     scores.update_layout(title='次数と誤差の比較', height=320, yaxis=dict(type='log', title='RMSE [m]（対数目盛）'), xaxis=dict(title='次数 p', dtick=1), legend=dict(orientation='h', y=1.12), margin=dict(t=80))
     st.plotly_chart(scores, width="stretch", key='ar_order_errors')
-    st.caption('次数ごとの検証誤差は比較用で、次数の自動選択には使っていません。')
+    st.caption('次数ごとの検証誤差は比較用．次数の自動選択には未使用．')
     with st.expander('次数ごとの誤差・AIC・BIC・係数・記録データ'):
         st.dataframe(pd.DataFrame([dict(次数=r['p'], 学習RMSE=r['train_rmse'], 検証1ステップRMSE=r['validation_rmse'], 検証連続予測RMSE=r['recursive_rmse'], AIC=r['aic'], BIC=r['bic']) for r in rows]), hide_index=True)
-        st.caption('AIC・BICは小さい値を採用。共通の学習窓で最小二乗推定し、n log(SSE/n) にパラメータ数の罰則を加えます。分散を1パラメータとして数え、全候補共通の定数項は省略します。')
+        st.caption('AIC・BICは小さい値を採用．分散を1パラメータとして数え全候補共通の定数項は省略．')
         if p:
             st.dataframe(pd.DataFrame({'係数': [f'a{j}' for j in range(1, p+1)], '値': weights}), hide_index=True)
             radius = max(abs(np.roots(np.r_[1.0, -weights])))
             st.write(f'漸化式の特性根の最大絶対値：{radius:.4g}')
             if radius > 1 + 1e-8:
-                st.caption('1を超える特性根があり、長時間の連続予測が増大する可能性があります。')
+                st.caption('1を超える特性根があり長時間の連続予測が増大する可能性．')
         st.dataframe(pd.DataFrame({'時間 [s]': ts, '観測値 [m]': y, '区間': ['学習']*split + ['検証']*(len(y)-split)}), hide_index=True)
         st.download_button('記録データをCSVで保存', pd.DataFrame({'time_s': ts, 'observed_m': y, 'true_m': truth, 'split': ['train']*split + ['validation']*(len(y)-split)}).to_csv(index=False).encode('utf-8-sig'), file_name='sensor_records.csv', mime='text/csv', key='download_records')
 
@@ -288,9 +288,9 @@ def animation():
         fig.update_layout(title="変位の時間変化", height=380, margin=dict(l=45, r=15, t=50, b=45), showlegend=True, legend=dict(orientation="h", y=1.15), uirevision="fixed", xaxis=dict(title="時間 t [s]", range=[0, ss.duration], fixedrange=True), yaxis=dict(title="変位 x [m]", range=[-observation_limit, observation_limit], zeroline=True, fixedrange=True))
         st.plotly_chart(fig, width="stretch", key="displacement", config={"displayModeBar": False})
     st.progress(min(1.0, t / ss.duration))
-    st.caption("赤い×は記録周期ごとの観測値です。線は連続時間の真の変位で、ARモデルの学習には赤い×だけを使います。")
+    st.caption("赤い×は記録周期ごとの観測値．線は連続時間の真の変位でARモデルの学習には赤い×だけを使用．")
     st.subheader("記録したデータからARモデルを学習")
-    st.caption("現在時刻までの記録を固定し、前半を学習、後半を検証に使います。学習すると再生を一時停止します。")
+    st.caption("現在時刻までの記録を固定し前半を学習，後半を検証に利用．")
     if st.button("現在までの記録で学習する", disabled=observed_n < 12, key="fit_ar"):
         try:
             result = fit_orders(sensor_y[:observed_n], ss.train_fraction, ss.max_order, ss.intercept)
@@ -300,7 +300,7 @@ def animation():
             else:
                 chosen = next((r for r in result["rows"] if r["p"] == ss.manual_order), None)
                 if chosen is None:
-                    raise ValueError(f"指定次数を推定できません。候補上限は {result['pmax']} です。次数を下げるか記録を増やしてください。")
+                    raise ValueError(f"指定次数を推定不能．候補上限は {result['pmax']} ．次数を下げるか記録を増やす必要")
             ss.ar_report = dict(result=result, chosen=chosen, times=sensor_t[:observed_n].copy(),
                                 truth=sensor_truth[:observed_n].copy(), y=sensor_y[:observed_n].copy(),
                                 method=ss.order_method, intercept=ss.intercept, dt=ss.sensor_dt)
@@ -309,23 +309,23 @@ def animation():
         except ValueError as exc:
             st.warning(str(exc))
     if observed_n < 12:
-        st.caption("学習には12点以上の記録が必要です。「全時間を記録して停止」でもデータを用意できます。")
+        st.caption("学習には12点以上の記録が必要．")
     if "ar_report" in ss:
         show_ar_report(ss.ar_report)
     if was_playing and not ss.playing:
         st.rerun()  # Refresh buttons and disable periodic reruns after completion.
 
 
-with st.expander("このデモで比較すること"):
-    st.markdown("""
-- **良好な観測**：短い記録周期、小さな観測誤差で学習します。
-- **過学習を比較**：次数の選び方を「学習誤差最小」「BICで自動選択」「手動指定」で切り替え、再学習します。高次モデルの学習誤差と検証誤差を比較します。
-- **信号がノイズに埋もれる**：小さな振幅に大きな観測誤差が重なると、BICがAR(0)などの単純なモデルを選ぶ場合があります。
-
-1ステップ予測は直前の**観測値**を毎回使います。連続予測は学習区間の末尾から出発し、以後は**自分の予測値**を使います。
-検証区間は次数の自動選択に使いません。この画面を見ながら設定を調整した場合、最終確認には別の乱数シードなどで再検証してください。
-自由振動は時間とともに減衰するため、後半の信号が小さくなって誤差も小さく見える場合があります。ゼロ予測とも比較します。
-ノイズのない線形自由振動の標本列は原理上AR(2)で表せますが、観測ノイズが加わった記録では選択次数が2になるとは限りません。
-    """)
+#with st.expander("このデモで比較すること"):
+#    st.markdown("""
+#- **良好な観測**：短い記録周期、小さな観測誤差で学習します。
+#- **過学習を比較**：次数の選び方を「学習誤差最小」「BICで自動選択」「手動指定」で切り替え、再学習します。高次モデルの学習誤差と検証誤差を比較します。
+#- **信号がノイズに埋もれる**：小さな振幅に大きな観測誤差が重なると、BICがAR(0)などの単純なモデルを選ぶ場合があります。
+#
+#1ステップ予測は直前の**観測値**を毎回使います。連続予測は学習区間の末尾から出発し、以後は**自分の予測値**を使います。
+#検証区間は次数の自動選択に使いません。この画面を見ながら設定を調整した場合、最終確認には別の乱数シードなどで再検証してください。
+#自由振動は時間とともに減衰するため、後半の信号が小さくなって誤差も小さく見える場合があります。ゼロ予測とも比較します。
+#ノイズのない線形自由振動の標本列は原理上AR(2)で表せますが、観測ノイズが加わった記録では選択次数が2になるとは限りません。
+#    """)
 animation()
-st.caption("計算は線形運動方程式の解析解を使用．描画は約0.1秒間隔を目標に更新し，再生時刻は実経過時間から求めます．")
+st.caption("計算は線形運動方程式の解析解を使用．描画は約0.1秒間隔を目標に更新し，再生時刻は実経過時間から求める．")
