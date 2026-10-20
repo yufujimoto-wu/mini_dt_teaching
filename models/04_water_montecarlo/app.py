@@ -48,7 +48,6 @@ with st.sidebar:
     presets=st.columns(3)
     for col,label,value in zip(presets,['負 −1','無相関 0','正 +1'],[-1.,0.,1.]):
         col.button(label,on_click=preset,args=(value,),width='stretch')
-    #st.caption('降雨強度の標本は固定し，流域1と流域2の組合せだけを変更．実際の標本相関は画面に表示します．')
     st.subheader('共通の降雨強度分布')
     st.slider('ピーク強度の中心 [mm/h]',0.,100.,step=5.,key='peak',on_change=restart)
     st.slider('ピーク強度のばらつき ±割合',0.,.8,step=.05,key='spread',on_change=restart)
@@ -95,7 +94,7 @@ data=selected_data(result,ss.member-1,base)
 lo,hi=np.quantile(heights,[.05,.95],axis=0);mean=heights.mean(axis=0)
 p_window,maxima=probability(heights,times,ss.threshold,ss.horizon)
 actual='未定義（強度のばらつき0）' if result['corr'] is None else f"{result['corr']:+.4f}"
-st.info(f'0〜{ss.horizon:g}時間に一度でも基準水位 {ss.threshold:g} m を超える割合：{p_window:.1%}（{round(p_window*ss.n)}/{ss.n} 本）　実際の降雨ピークの標本相関：{actual}')
+#st.info(f'0〜{ss.horizon:g}時間に一度でも基準水位 {ss.threshold:g} m を超える割合：{p_window:.1%}（{round(p_window*ss.n)}/{ss.n} 本）　生成したN組の降雨ピークの標本相関：{actual}')
 #st.caption('相関を変えても再生時刻を保持します．各流域の標本平均・標本分布は完全に同じです．無相関は独立性の保証を意味しません．')
 # Use common bounds for every correlation so visual scaling cannot mimic an effect.
 scale_result=calculate(base,ss.n,ss.seed,1.)
@@ -138,6 +137,13 @@ def diagram(state):
 
 def rain_pairs_plot():
     st.subheader('同じシナリオの降雨ピークの組合せ')
+
+    corr = result['corr']
+    if corr is None:
+        st.caption('降雨ピークの標本相関：未定義（ばらつき0）')
+    else:
+        st.caption(f'降雨ピークの標本相関：{corr:+.3f}')
+        
     bound=[ss.peak*(1-ss.spread),ss.peak*(1+ss.spread)]
     if bound[0]==bound[1]:bound=[ss.peak-1,ss.peak+1]
     fig=go.Figure(go.Scatter(x=result['p1'],y=result['p2'],mode='markers',marker=dict(color='#2563eb',size=5,opacity=.5),name='降雨ピークの組'))
