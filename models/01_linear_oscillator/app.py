@@ -103,7 +103,7 @@ with st.sidebar:
     st.select_slider("記録周期 Δt [s]", options=[0.05, 0.1, 0.15, 0.2, 0.3, 0.5, 0.8, 1.0, 1.5, 2.0], key="sensor_dt", on_change=restart)
     st.slider("観測誤差の標準偏差 σ [m]", 0.0, 0.5, step=0.005, key="noise", on_change=restart)
     st.number_input("乱数シード", min_value=0, max_value=999999, step=1, key="seed", on_change=restart)
-    st.caption("観測値 = 真の変位 + 独立な正規乱数．")
+ #   st.caption("観測値 = 真の変位 + 独立な正規乱数．")
     st.subheader("ARモデルの学習")
     st.slider("学習に使う記録の割合", 0.4, 0.8, step=0.05, key="train_fraction", on_change=clear_model)
     st.slider("候補の最大次数", 2, 20, step=1, key="max_order", on_change=clear_model)
@@ -117,14 +117,14 @@ with st.sidebar:
 
 st.title("自由振動・センサ観測・ARモデル")
 st.latex(r"m\ddot{x}(t)+c\dot{x}(t)+kx(t)=0")
-st.caption("外力のない，ばね・ダンパにつながれた台車の運動．右向きを変位の正方向")
+#st.caption("外力のない，ばね・ダンパにつながれた台車の運動．右向きを変位の正方向")
 buttons = st.columns(4)
 buttons[0].button("▶ 再生", on_click=play, disabled=ss.playing, width="stretch")
 buttons[1].button("⏸ 一時停止", on_click=pause, disabled=not ss.playing, width="stretch")
 buttons[2].button("↶ 先頭に戻る", on_click=restart, width="stretch")
 buttons[3].button("全時間を記録して停止", on_click=record_all, width="stretch")
 st.slider("時刻を指定 [s]（操作すると一時停止）", 0.0, ss.duration, step=0.05, key="seek", on_change=seek)
-st.caption("上のスライダーは時刻指定用．現在の再生時刻は下に表示．")
+#st.caption("上のスライダーは時刻指定用．現在の再生時刻は下に表示．")
 
 params = (ss.m, ss.k, ss.c, ss.x0, ss.v0)
 zeta = ss.c / (2 * math.sqrt(ss.m * ss.k))
@@ -328,4 +328,4 @@ def animation():
 #ノイズのない線形自由振動の標本列は原理上AR(2)で表せますが、観測ノイズが加わった記録では選択次数が2になるとは限りません。
 #    """)
 animation()
-st.caption("計算は線形運動方程式の解析解を使用．描画は約0.1秒間隔を目標に更新し，再生時刻は実経過時間から求める．")
+#st.caption("計算は線形運動方程式の解析解を使用．描画は約0.1秒間隔を目標に更新し，再生時刻は実経過時間から求める．")
