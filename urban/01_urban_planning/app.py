@@ -1114,7 +1114,7 @@ def disaster_demand_profile_for_district(d, logistics_hubs):
     """
     災害時需要 =
       地区基礎需要 × 地区別倍率
-      + 物流設備需要（物流拠点がある場合。災害時も低下させない）
+      + 物流設備需要（物流拠点がある場合．災害時も低下させない）
     """
     p = districts[d]
     base = DEMAND_SHAPES[p["profile"]] * p["daily_energy"]
@@ -1193,7 +1193,7 @@ def disaster_logistics_metrics(
 with st.sidebar:
     st.header("条件設定")
 
-    st.markdown("### ① 地域物流拠点")
+    st.markdown("### 地域物流拠点")
     logistics_hubs = st.multiselect(
         "最大2地区を選択",
         options=LOGISTICS_ALLOWED,
@@ -1202,10 +1202,10 @@ with st.sidebar:
         format_func=lambda d: f"{d}：{districts[d]['name']}",
     )
     st.caption(
-        "物流拠点を置くと、その地区に物流設備の24時間電力需要が追加されます。"
+        "設置地区への物流設備需要の加算"
     )
 
-    st.markdown("### ② 地域エネルギー拠点")
+    st.markdown("### 地域エネルギー拠点")
 
     energy_hub_districts = st.multiselect(
         "設置する地区（最大3か所）",
@@ -1214,19 +1214,6 @@ with st.sidebar:
         max_selections=3,
         format_func=lambda d: f"{d}：{districts[d]['name']}",
     )
-
-    n_energy_selected = len(energy_hub_districts)
-    remaining_energy_slots = 3 - n_energy_selected
-
-    if n_energy_selected == 0:
-        st.caption("0 / 3 か所選択中（あと3か所設置可能）")
-    elif remaining_energy_slots > 0:
-        st.caption(
-            f"{n_energy_selected} / 3 か所選択中"
-            f"（あと{remaining_energy_slots}か所設置可能）"
-        )
-    else:
-        st.caption("3 / 3 か所選択中（設置可能数の上限）")
 
     # Default: no energy hub in any district.
     energy_choice = {
@@ -1248,7 +1235,7 @@ with st.sidebar:
             key=f"energy_{d}",
         )
 
-    with st.expander("電源特性を見る"):
+    with st.expander("電源特性"):
         tech_rows = []
         for tech in ["PV型", "風力型", "安定電源型"]:
             t = TECHNOLOGIES[tech]
@@ -1263,13 +1250,10 @@ with st.sidebar:
             hide_index=True,
             use_container_width=True,
         )
-        st.caption(
-            "※ CI・設備特性は意思決定の考え方を学ぶための講義用仮想値。"
-        )
 
     with st.expander("詳細シナリオ設定"):
         disaster_preset = st.selectbox(
-            "被害条件（配置案の比較では固定）",
+            "被害条件（比較時は固定）",
             ["道路寸断＋系統停電", "道路寸断のみ", "系統停電のみ", "別の被害箇所"],
         )
         mode = st.radio(
@@ -1280,8 +1264,7 @@ with st.sidebar:
 
         if mode == "災害時":
             st.caption(
-                "一部道路の寸断・一部地区の停電・"
-                "病院/避難所等の優先物資需要増加を想定。"
+                "被害条件に応じた道路・配電線の切断，地区別の需要変化"
             )
 
 
@@ -1392,7 +1375,7 @@ with col_main:
 
     layer = st.radio(
         "表示レイヤー",
-        ["🏙️ 都市", "🚚 物流", "⚡ 電力"],
+        ["都市", "物流", "電力"],
         horizontal=True,
         key="urban_layer",
     )
@@ -1404,7 +1387,7 @@ with col_main:
     # --------------------------------------------------------
     # 10a. City layer
     # --------------------------------------------------------
-    if layer == "🏙️ 都市":
+    if layer == "都市":
 
         st.markdown(
             f"### {'' if mode == '平常時' else '災害時：'}都市イメージ"
@@ -1688,9 +1671,7 @@ with col_main:
             st.rerun()
 
         st.caption(
-            "都市レイヤー：A〜Hを地区の『領域』として表示 "
-            " 地区名にマウスを重ねると概要確認化 "
-            " 物流・電力のネットワーク構造は各レイヤーで確認"
+            "地区選択で詳細表示．物流・電力はレイヤー切替．"
         )
 
         selected_district = st.session_state["selected_district"]
@@ -1717,7 +1698,7 @@ with col_main:
     # --------------------------------------------------------
     # 10b. Electricity layer
     # --------------------------------------------------------
-    elif layer == "⚡ 電力":
+    elif layer == "電力":
 
         st.markdown(
             f"### {'' if mode == '平常時' else '災害時：'}"
@@ -1983,13 +1964,12 @@ with col_main:
             st.rerun()
 
         st.caption(
-            "地区ノードをクリックして下の詳細を切り替え "
-            "電力レイヤー：青線＝配電系統（太いほど選択時刻の上流供給が大きい）"
+            "地区選択で詳細表示．青線の太さ：選択時刻の系統供給量．"
         )
 
         # Time slider intentionally placed below the network map.
         selected_hour = st.slider(
-            "電力供給状態を見る時刻",
+            "表示時刻",
             min_value=0,
             max_value=23,
             value=st.session_state.get("power_hour", 12),
@@ -2067,7 +2047,7 @@ with col_main:
             fig_profile.add_trace(go.Scatter(x=hours, y=op["local_supply"], name="地域電源からの供給"))
             fig_profile.add_trace(go.Bar(x=hours, y=op["unserved"], name="供給対象需要の未供給", opacity=0.5))
         with st.expander("蓄電池・発電の使い道"):
-            st.caption("初期残量0 kWh。余剰を充電し、不足時に放電。地域間の電力融通は対象外。")
+            st.caption("初期残量0 kWh，余剰時に充電・不足時に放電．地区間融通なし．")
             battery_fig = go.Figure()
             for key, label in [("direct_supply", "直接供給"), ("battery_charge", "充電"),
                                ("battery_discharge", "放電"), ("curtailed", "未利用発電")]:
@@ -2114,7 +2094,7 @@ with col_main:
     # --------------------------------------------------------
     # 10c. Logistics layer
     # --------------------------------------------------------
-    elif layer == "🚚 物流":
+    elif layer == "物流":
 
         st.markdown(
             f"### {'' if mode == '平常時' else '災害時：'}"
@@ -2449,11 +2429,8 @@ with col_main:
             st.rerun()
 
         st.caption(
-            "地区ノードをクリックして物流サービス詳細を切り替え "
-            "物流レイヤー：グレー＝道路 ／ 濃青＝都市外・拠点間の幹線輸送 ／ "
-            "緑＝1日で配送可能なラストワンマイル"
-            f" 各地域物流拠点の1日配送距離上限は "
-            f"{LOGISTICS_DAILY_DISTANCE_CAPACITY:.0f} distance-unit。"
+            "灰：道路，濃青：幹線輸送，緑：地区配送．"
+            f"各拠点の配送距離上限：{LOGISTICS_DAILY_DISTANCE_CAPACITY:.0f} / 日．"
         )
 
         selected_district = st.session_state["selected_district"]
@@ -2468,13 +2445,13 @@ with col_main:
 
         if a["served"]:
             st.success(
-                f"{selected_district}地区は地域物流拠点 {a['hub']} が担当 "
-                f" 片道ネットワーク距離 {a['distance']:.2f}、"
-                f"1日の配送負担 {a['route_burden']:.2f}。"
+                f"担当拠点：{a['hub']}，"
+                f"片道距離：{a['distance']:.2f}，"
+                f"配送距離：{a['route_burden']:.2f} / 日"
             )
         else:
             st.error(
-                f"{selected_district}地区は1日配送制約の中では配送不能 "
+                f"{selected_district}地区：配送不可，"
                 f" 理由：{a['reason']}"
             )
 
@@ -2569,7 +2546,7 @@ with col_kpi:
             msgs.append("予算超過")
         st.error("実行不可能：" + " / ".join(msgs))
     else:
-        st.success("配置制約を満たしています")
+        st.success("配置制約内")
 
     st.divider()
     if mode == "平常時":
@@ -2619,8 +2596,8 @@ with col_kpi:
             )
 
         #st.caption(
-        #    "平常時：全地区は系統電力と都市外物流でサービス可能。"
-        #    "地域拠点は低炭素化・効率化のための追加施策です。"
+        #    "平常時：全地区は系統電力と都市外物流でサービス可能．"
+        #    "地域拠点は低炭素化・効率化のための追加施策です．"
         #)
 
     else:
@@ -2664,12 +2641,8 @@ with col_kpi:
                 f"{disaster_energy['autonomy_hours']:.1f}","h",
             )
 
-        st.caption(
-            "災害時：CO₂や平常時配送効率より、"
-            "重要サービス・到達性・継続性を優先評価します。"
-        )
 
-        st.caption("時間換算値は連続稼働時間ではない。指標の定義を参照。")
+        st.caption("時間換算値：連続稼働時間とは異なる指標")
         st.divider()
         st.markdown("#### 補助指標")
         st.caption(
@@ -2721,7 +2694,7 @@ def evaluate_configuration(choice, hubs):
             districts[d]["demand_profile"] = previous[d]
 
 with st.expander("配置案A・Bの比較と記録", expanded=False):
-    st.caption("配置だけを一時保持し、両案を現在の同じ被害条件で再計算。再読込・翌週への保存は保証されないため、配置一覧を記録してください。")
+    st.caption("配置の一時保持，同じ被害条件での再計算．次回利用には配置の記録が必要．")
     columns = st.columns(3)
     for index, label in enumerate(["A", "B"]):
         if columns[index].button(f"現在の配置を案{label}に保持"):
@@ -2739,18 +2712,15 @@ with st.expander("配置案A・Bの比較と記録", expanded=False):
                            for k in records["A"] if isinstance(records["A"][k], (int, float)) and isinstance(records["B"][k], (int, float))}
             st.dataframe(pd.DataFrame({"B − A": differences}), use_container_width=True)
         for label, plan in plans.items():
-            locations = "、".join(f"{d}:{t}" for d,t in plan["energy"].items() if t != "なし") or "なし"
+            locations = "，".join(f"{d}:{t}" for d,t in plan["energy"].items() if t != "なし") or "なし"
             st.write(f"案{label}　物流：{', '.join(plan['hubs']) or 'なし'}　電源：{locations}")
 
 with st.expander("指標の定義・地区別の結果"):
     st.markdown("""
-- 平均片道距離は配送できた物資量で重み付けした平均。未配送地区を含まない。距離は仮想の距離単位。
-- CO₂は電力利用の計算範囲。配送車両の排出や設備製造は含まない。地域電源の削減量は、同じ物流需要も含む全需要を系統で賄う場合との差。
-- 電源は容量・発電量・費用の異なる設備案。地域電源の原単位は供給電力量へ適用する講義用の係数。
-- 災害時は地区の最低サービス需要を優先し、残りを物流設備へ供給。地域間の電力融通は扱わない。
-- 物流設備の一日電力充足率70%以上を稼働可能とする簡略判定。連続稼働の保証ではない。配送順は近い地区からの固定ルール。
-- 時間換算値は最低サービスへの供給電力量を平均最低サービス負荷で除した値。実際の連続供給時間ではない。
-- 被害条件を切り替えても、災害時需要の倍率は共通。配置の変更は災害発生前の設備計画として比較。
+- **平均片道距離**：配送済み物資量による加重平均．未配送地区は対象外．
+- **CO₂**：電力利用分．車両・設備製造は対象外．削減量は同じ需要を系統電力で賄う場合との差．
+- **物流稼働**：一日電力充足率70%以上．連続稼働の保証なし．配送は近隣地区から順に割当．
+- **時間換算値**：最低サービスへの供給電力量 ÷ 平均最低サービス負荷．
 """)
     current_logistics = disaster_logistics if mode == "災害時" else normal_logistics
     rows = []
@@ -2761,7 +2731,7 @@ with st.expander("指標の定義・地区別の結果"):
                      "災害時 最低サービス充足率 [%]": round(disaster_energy["district_service_pct"][d],1)})
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
-with st.expander("8地区の条件と配置制約を見る"):
+with st.expander("地区条件・配置制約"):
     rows = []
 
     for d, p in districts.items():
@@ -2799,50 +2769,13 @@ with st.expander("8地区の条件と配置制約を見る"):
         hide_index=True,
     )
 
-with st.expander("モデルの基本ルールを見る"):
-    st.markdown(
-        """
-- **平常時の電力**：全地区が系統電力に接続されており、地域エネルギー拠点がなくても需要は満たされる。
-- **電力レイヤー**：A〜Hは配電系統トポロジーで接続され、上位系統から下流へ電力が供給される。選択した時刻について、配電線の太さはその線を通る上流供給量を表す。
-- **物流→電力の依存関係**：地域物流拠点を設置すると、冷蔵・情報通信・荷役等を表す24時間の物流設備需要がその地区の電力需要に加算される。
-- **地域エネルギー拠点**：選択した電源の24時間発電プロファイルを持ち、設置地区の需要を優先して供給する。
-- **地域電源のCO₂**：PV型・風力型・安定電源型（コージェネ相当）はそれぞれ異なる講義用CIを持ち、実際に地域供給した電力量に応じてCO₂排出量へ反映する。
-- **蓄電池**：各エネルギー拠点に付随し、余剰発電を充電・不足時に放電する。運用はDigital Twin内の固定ルールで自動決定する。
-- **不足電力**：平常時は系統から購入する。CO₂排出量は実際の系統購入電力量と時間別CIから計算する。
-- **都市外物流センター**：長距離ロジスティクスの拠点とし、A・Fを都市への入口として地域物流ネットワークへ物資を投入する。
-- **地域物流拠点**：都市外物流センターまたは別の地域物流拠点から物資を受け取り、他拠点への中継輸送と周辺地区へのラストワンマイル集配を担う。
-- **物流リンク**：都市道路リンクには距離を持たせ、物流の配送距離は表示されている道路ネットワーク上の最短距離から計算する。
-- **1日配送制約**：各地域物流拠点には1日に走行可能な配送距離の上限があり、近い地区から順に担当する固定ルールで配送可否を判定する。
-- **平常時の物流KPI**：まず1日の配送制約の中でどれだけの物資を配送できるかを評価し、その上で平均ラストワンマイル距離や幹線・拠点間輸送距離を効率性指標として見る。
-- **物流レイヤー**：濃青で都市外・地域物流拠点間の幹線輸送、緑で実際に担当する地区へのラストワンマイル配送を表示する。
-- **災害時の地区基礎需要**：地区の用途に応じて需要が変化する。住宅・商業・学校等では低下する一方、病院地区は低下せず、避難所地区では増加する。
-- **物流設備需要**：物流拠点の冷蔵・情報通信・荷役等の需要は災害時も低下しない。
-- **最低サービス需要**：実際に発生する災害時需要とは別に、地区基礎需要に最低サービス率を適用し、物流設備需要は別に全量を要求する。
-- **災害時**：一部道路・外部アクセスに加えて一部配電線も断線する。電力レイヤーでは系統から切り離される地区、物流レイヤーでは物資到達が困難になる地区をそれぞれ確認する。
-- **予算制約**：電源タイプ・物流拠点ごとの講義用コストを合計し、100 points以内とする。
-        """
-    )
-
-# ============================================================
-# 13. Mission
-# ============================================================
-
-if mode == "平常時":
-    st.info(
-        "MISSION：予算100 points以内で、最大3か所の地域エネルギー拠点と"
-        "最大2か所の物流拠点を配置してください。"
-        "物流では1日配送可能性と配送距離、電力ではCO₂と系統依存を確認し、"
-        "両レイヤーを切り替えて都市全体として良い配置を探してください。"
-    )
-else:
-    isolated = disaster_logistics["isolated_districts"]
-    isolated_text = (
-        "　未配送地区：" + ", ".join(isolated)
-        if isolated else ""
-    )
-
-    st.warning(
-        "DISASTER MISSION：平常時に考えた配置は、道路寸断・系統停電下でも"
-        "重要サービスを維持できるでしょうか？"
-        + isolated_text
-    )
+with st.expander("計算条件"):
+    st.markdown("""
+- **電力**：設置地区への地域電源供給，平常時の不足分は系統購入．地区間融通なし．
+- **蓄電池**：各電源に付随．初期残量0 kWh，余剰時に充電・不足時に放電．
+- **物流**：都市外の入口はA・F．地域拠点間の中継と最短経路による地区配送．拠点ごとの一日配送距離制約．
+- **設備需要**：物流拠点設置に伴う電力需要の追加．災害時も同じ設備需要．
+- **災害時**：配電線の接続から停電地区を判定．地区最低サービスを優先し，残りを物流へ供給．
+- **比較条件**：被害条件間で需要倍率は共通．配置変更は災害前の設備計画として評価．
+- **設備・予算**：電源ごとに発電量・原単位・費用が異なる設備案．予算100 pt，電源3か所・物流2か所まで．
+""")
