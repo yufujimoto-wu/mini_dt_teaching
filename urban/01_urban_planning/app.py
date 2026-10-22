@@ -236,7 +236,7 @@ def calculate_power_flows_for_hour(hour, energy_choice, normal_energy, blocked_l
     for d in districts:
         demand_h = float(districts[d]["demand_profile"][hour])
         local_h = float(normal_energy["district_ops"][d]["local_supply"][hour])
-        local_net[d] = max(demand_h - local_h, 0.0)
+        local_net[d] = float(normal_energy["district_ops"][d]["grid"][hour])
 
     subtree_need = {n: 0.0 for n in POWER_PARENT}
     for d in districts:
@@ -639,6 +639,8 @@ def operate_local_energy(demand, generation):
     battery_charge = np.zeros(24)
     battery_discharge = np.zeros(24)
     curtailed = np.zeros(24)
+    soc_history = np.zeros(24)
+    direct_supply = np.zeros(24)
 
     for h in range(24):
         load = demand[h]
@@ -646,6 +648,7 @@ def operate_local_energy(demand, generation):
 
         direct = min(load, gen)
         local_supply[h] += direct
+        direct_supply[h] = direct
 
         surplus = max(gen - direct, 0.0)
         deficit = max(load - direct, 0.0)
@@ -674,6 +677,7 @@ def operate_local_energy(demand, generation):
         local_supply[h] += discharge_to_load
 
         grid[h] = max(deficit - discharge_to_load, 0.0)
+        soc_history[h] = soc
 
     return {
         "grid": grid,
@@ -681,6 +685,8 @@ def operate_local_energy(demand, generation):
         "battery_charge": battery_charge,
         "battery_discharge": battery_discharge,
         "curtailed": curtailed,
+        "soc": soc_history,
+        "direct_supply": direct_supply,
     }
 
 def normal_energy_metrics(energy_choice):
@@ -752,56 +758,16 @@ def logistics_trip_count(goods_units):
     )
 
 
-def logistics_hub_power_status(
-    hub,
-    energy_choice,
-    blocked_power_lines=None,
-):
-    """
-    Is a regional logistics hub electrically operable?
-
-    - If the district remains connected to the upper grid: operable.
-    - If disconnected: the local energy hub must cover at least
-      LOGISTICS_MIN_POWER_COVERAGE of the logistics equipment load.
-
-    This intentionally isolates the logistics equipment requirement as a
-    teaching abstraction so the cross-layer dependency is easy to follow.
-    """
-    reachable = power_reachable_from_grid(
-        blocked_lines=blocked_power_lines,
-    )
-
-    if hub in reachable:
-        return {
-            "operational": True,
-            "power_coverage": 1.0,
-            "reason": "系統から電力供給可能",
-        }
-
-    tech = energy_choice[hub]
-    generation = TECHNOLOGIES[tech]["generation"]
-
-    op = operate_local_energy(
-        LOGISTICS_POWER_PROFILE,
-        generation,
-    )
-
-    coverage = (
-        float(op["local_supply"].sum())
-        / float(LOGISTICS_POWER_PROFILE.sum())
-        if LOGISTICS_POWER_PROFILE.sum() > 0
-        else 1.0
-    )
-
-    return {
-        "operational": coverage >= LOGISTICS_MIN_POWER_COVERAGE,
-        "power_coverage": coverage,
-        "reason": (
-            "地域電源で物流設備を維持"
-            if coverage >= LOGISTICS_MIN_POWER_COVERAGE
-            else "物流設備の電力不足"
-        ),
-    }
+def logistics_hub_power_status(hub, energy_choice, blocked_power_lines=None):
+    # One shared local dispatch: essential district service first, logistics second.
+    op = disaster_district_operation(hub, energy_choice[hub], True, blocked_power_lines)
+    required = float(LOGISTICS_POWER_PROFILE.sum())
+    coverage = float(op["logistics_supply"].sum()) / required
+    return {"operational": coverage >= LOGISTICS_MIN_POWER_COVERAGE,
+            "power_coverage": coverage,
+            "reason": "系統から電力供給可能" if op["connected"] else
+                      ("地域電源で物流設備を維持" if coverage >= LOGISTICS_MIN_POWER_COVERAGE
+                       else "地区最低サービス供給後の物流電力不足")}
 
 
 def build_logistics_supply_chain(
@@ -981,7 +947,10 @@ def evaluate_logistics_network(
             "trips": 0,
             "route_burden": float("inf"),
             "served": False,
-            "reason": "利用可能な地域物流拠点なし",
+            "reason": ("物流拠点が未設置" if not logistics_hubs else
+                       "物流拠点の電力不足" if not any(operational_hubs.values()) else
+                       "都市外から拠点への供給経路なし" if not supplied_hubs else
+                       "稼働・供給可能な拠点からの道路経路なし"),
         }
         for d in districts
     }
@@ -1103,6 +1072,7 @@ def normal_logistics_metrics(logistics_hubs):
 # ============================================================
 
 def disaster_scenario():
+    preset = globals().get("disaster_preset", "道路寸断＋系統停電")
     blocked_roads = {
         tuple(sorted(("B", "E"))),
         tuple(sorted(("D", "G"))),
@@ -1111,12 +1081,21 @@ def disaster_scenario():
         tuple(sorted((EXTERNAL_NODE, "A"))),
     }
 
-    blackout_districts = {"C", "E", "G", "H"}
+
 
     # Distribution-line outages for the electricity layer.
     blocked_power_lines = {
         tuple(sorted((GRID_NODE, "E"))),
     }
+
+    if preset == "道路寸断のみ":
+        blocked_power_lines = set()
+    elif preset == "系統停電のみ":
+        blocked_roads = set()
+    elif preset == "別の被害箇所":
+        blocked_roads = {tuple(sorted(e)) for e in [("A", "D"), ("D", "F"), ("E", "H")]}
+        blocked_power_lines = {tuple(sorted(("E", "G")))}
+    blackout_districts = set(districts) - power_reachable_from_grid(blocked_power_lines)
 
     goods_multiplier = {d: 1.0 for d in districts}
     goods_multiplier["E"] = 1.8
@@ -1147,97 +1126,43 @@ def disaster_demand_profile_for_district(d, logistics_hubs):
     return disaster_base
 
 
+def disaster_district_operation(d, tech, has_logistics, blocked_lines=None):
+    connected = d in power_reachable_from_grid(blocked_lines)
+    base = (DEMAND_SHAPES[districts[d]["profile"]] * districts[d]["daily_energy"]
+            * DISASTER_BASE_DEMAND_MULTIPLIER[d])
+    essential = base * DISASTER_MIN_SERVICE_RATIO[d]
+    logistics = LOGISTICS_POWER_PROFILE if has_logistics else np.zeros(24)
+    # Grid-connected districts receive full demand; islanded districts serve essential load.
+    district_target = base if connected else essential
+    demand = district_target + logistics
+    op = operate_local_energy(demand, TECHNOLOGIES[tech]["generation"])
+    available = demand if connected else op["local_supply"]
+    district_supply = np.minimum(district_target, available)
+    logistics_supply = np.minimum(logistics, np.maximum(available - district_supply, 0))
+    op.update(demand=demand, actual_demand=base + logistics, essential=essential,
+              district_supply=district_supply, logistics_supply=logistics_supply,
+              unserved=np.maximum(demand - available, 0), connected=connected)
+    if not connected:
+        op["grid"] = np.zeros(24)
+    return op
+
+
 def disaster_energy_metrics(energy_choice, logistics_hubs):
     scenario = disaster_scenario()
+    ops = {d: disaster_district_operation(d, energy_choice[d], d in logistics_hubs,
+                                          scenario["blocked_power_lines"]) for d in districts}
+    def ratio(nodes):
+        required = sum(float(ops[d]["essential"].sum()) for d in nodes)
+        supplied = sum(float(np.minimum(ops[d]["district_supply"], ops[d]["essential"]).sum())
+                       for d in nodes)
+        return 100 * supplied / required if required else 100.0
+    critical = [d for d in districts if districts[d]["critical"]]
+    per_district = {d: ratio([d]) for d in districts}
+    return {"district_ops": ops, "critical_supply_pct": ratio(critical),
+            "blackout_service_pct": ratio(scenario["blackout_districts"]),
+            "district_service_pct": per_district,
+            "autonomy_hours": min(per_district[d] / 100 * 24 for d in critical)}
 
-    supported_critical_energy = 0.0
-    required_critical_energy = 0.0
-    supported_blackout_energy = 0.0
-    required_blackout_energy = 0.0
-
-    for d in scenario["blackout_districts"]:
-        p = districts[d]
-
-        disaster_demand = disaster_demand_profile_for_district(
-            d,
-            logistics_hubs,
-        )
-
-        minimum_service_demand = (
-            disaster_demand
-            * scenario["minimum_service_ratio"][d]
-        )
-
-        required_blackout_energy += minimum_service_demand.sum()
-
-        tech = energy_choice[d]
-        generation = TECHNOLOGIES[tech]["generation"]
-        op = operate_local_energy(
-            minimum_service_demand,
-            generation,
-        )
-
-        supplied = (
-            minimum_service_demand.sum()
-            - op["grid"].sum()
-        )
-        supported_blackout_energy += supplied
-
-        if p["critical"] is not None:
-            required_critical_energy += minimum_service_demand.sum()
-            supported_critical_energy += supplied
-
-    critical_supply_pct = (
-        100 * supported_critical_energy / required_critical_energy
-        if required_critical_energy > 0 else 100.0
-    )
-
-    blackout_service_pct = (
-        100 * supported_blackout_energy / required_blackout_energy
-        if required_blackout_energy > 0 else 100.0
-    )
-
-    # Approximate autonomy: smallest supported-hours equivalent among blackout critical districts.
-    autonomy_candidates = []
-
-    for d in scenario["blackout_districts"]:
-        if districts[d]["critical"] is None:
-            continue
-
-        demand = (
-            disaster_demand_profile_for_district(
-                d,
-                logistics_hubs,
-            )
-            * scenario["minimum_service_ratio"][d]
-        )
-
-        generation = TECHNOLOGIES[
-            energy_choice[d]
-        ]["generation"]
-
-        op = operate_local_energy(demand, generation)
-
-        daily_supported = demand.sum() - op["grid"].sum()
-        mean_critical_load = demand.mean()
-
-        hours_equivalent = (
-            daily_supported / mean_critical_load
-            if mean_critical_load > 0 else 0.0
-        )
-        autonomy_candidates.append(hours_equivalent)
-
-    autonomy_hours = (
-        min(24.0, min(autonomy_candidates))
-        if autonomy_candidates
-        else 0.0
-    )
-
-    return {
-        "critical_supply_pct": critical_supply_pct,
-        "blackout_service_pct": blackout_service_pct,
-        "autonomy_hours": autonomy_hours,
-    }
 
 def disaster_logistics_metrics(
     logistics_hubs,
@@ -1343,6 +1268,10 @@ with st.sidebar:
         )
 
     with st.expander("詳細シナリオ設定"):
+        disaster_preset = st.selectbox(
+            "被害条件（配置案の比較では固定）",
+            ["道路寸断＋系統停電", "道路寸断のみ", "系統停電のみ", "別の被害箇所"],
+        )
         mode = st.radio(
             "評価モード",
             ["平常時", "災害時"],
@@ -1407,11 +1336,8 @@ disaster_logistics = disaster_logistics_metrics(
     energy_choice,
 )
 
-minimum_service = min(
-    disaster_energy["critical_supply_pct"],
-    disaster_energy["blackout_service_pct"],
-    disaster_logistics["goods_delivery_pct"],
-)
+minimum_service = min(disaster_energy["district_service_pct"].values())
+active_energy = disaster_energy if mode == "災害時" else normal_energy
 
 # ============================================================
 # 10. Dashboard: switchable infrastructure layers
@@ -1811,7 +1737,7 @@ with col_main:
         power_state = calculate_power_flows_for_hour(
             selected_hour,
             energy_choice,
-            normal_energy,
+            active_energy,
             blocked_lines=blocked_power_lines,
         )
 
@@ -1905,8 +1831,8 @@ with col_main:
         xvals, yvals, labels, sizes, hovertexts = [], [], [], [], []
 
         for d, p in districts.items():
-            demand_h = float(p["demand_profile"][selected_hour])
-            op = normal_energy["district_ops"][d]
+            op = active_energy["district_ops"][d]
+            demand_h = float(op["demand"][selected_hour] if mode == "災害時" else p["demand_profile"][selected_hour])
             local_h = float(op["local_supply"][selected_hour])
             gen_h = float(
                 TECHNOLOGIES[energy_choice[d]]["generation"][selected_hour]
@@ -1926,7 +1852,8 @@ with col_main:
                 f"{selected_hour}:00需要：{demand_h:.1f} kWh/h<br>"
                 f"地域発電：{gen_h:.1f} kWh/h<br>"
                 f"地域供給（蓄電池含む）：{local_h:.1f} kWh/h<br>"
-                f"上流系統から必要：{grid_h:.1f} kWh/h<br>"
+                f"上流系統からの供給：{grid_h:.1f} kWh/h<br>"
+                f"未供給：{float(op.get('unserved', np.zeros(24))[selected_hour]):.1f} kWh/h<br>"
                 f"系統接続：{'接続' if connected else '切離'}<br>"
                 f"電源：{energy_choice[d]}"
             )
@@ -2081,7 +2008,7 @@ with col_main:
         p = districts[selected_district]
         tech = energy_choice[selected_district]
         generation = TECHNOLOGIES[tech]["generation"]
-        op = normal_energy["district_ops"][selected_district]
+        op = active_energy["district_ops"][selected_district]
 
         fig_profile = go.Figure()
 
@@ -2094,7 +2021,7 @@ with col_main:
                 x=hours,
                 y=base_demand_profile,
                 mode="lines",
-                name="地区基礎需要",
+                name="平常時の地区基礎需要（参考）" if mode == "災害時" else "地区基礎需要",
             )
         )
 
@@ -2111,9 +2038,9 @@ with col_main:
         fig_profile.add_trace(
             go.Scatter(
                 x=hours,
-                y=p["demand_profile"],
+                y=op["demand"] if mode == "災害時" else p["demand_profile"],
                 mode="lines+markers",
-                name="合計電力需要",
+                name="供給対象需要（停電地区は最低サービス＋物流）" if mode == "災害時" else "合計電力需要",
             )
         )
 
@@ -2135,6 +2062,19 @@ with col_main:
                 opacity=0.35,
             )
         )
+
+        if mode == "災害時":
+            fig_profile.add_trace(go.Scatter(x=hours, y=op["local_supply"], name="地域電源からの供給"))
+            fig_profile.add_trace(go.Bar(x=hours, y=op["unserved"], name="供給対象需要の未供給", opacity=0.5))
+        with st.expander("蓄電池・発電の使い道"):
+            st.caption("初期残量0 kWh。余剰を充電し、不足時に放電。地域間の電力融通は対象外。")
+            battery_fig = go.Figure()
+            for key, label in [("direct_supply", "直接供給"), ("battery_charge", "充電"),
+                               ("battery_discharge", "放電"), ("curtailed", "未利用発電")]:
+                battery_fig.add_trace(go.Scatter(x=hours, y=op[key], name=label))
+            battery_fig.update_layout(height=240, xaxis_title="時刻", yaxis_title="電力量 [kWh/時]", margin=dict(t=20,b=30))
+            st.plotly_chart(battery_fig, use_container_width=True)
+            st.line_chart(pd.DataFrame({"蓄電残量 [kWh]": op["soc"]}, index=hours), height=170)
 
         fig_profile.add_vline(
             x=selected_hour,
@@ -2632,6 +2572,10 @@ with col_kpi:
         st.success("配置制約を満たしています")
 
     st.divider()
+    if mode == "平常時":
+        compact_metric("総電力需要", f"{normal_energy['total_demand'].sum():.0f}", "kWh/日")
+        compact_metric("系統購入電力量", f"{normal_energy['actual_grid'].sum():.0f}", "kWh/日")
+        compact_metric("電力利用に伴うCO₂", f"{normal_energy['actual_co2']:.1f}", "kg/日")
 
     if mode == "平常時":
         st.markdown("### 評価")
@@ -2639,7 +2583,7 @@ with col_kpi:
         c1, c2 = st.columns(2)
         with c1:
             compact_metric(
-                "CO₂削減量",
+                "地域電源によるCO₂削減",
                 f"{normal_energy['co2_reduction']:.0f}","kg/day",
             )
         with c2:
@@ -2658,14 +2602,14 @@ with col_kpi:
         avg_lm = normal_logistics["avg_delivery_distance"]
         with c4:
             compact_metric(
-                "平均Last-mile",
+                "配送物資の平均片道距離",
                 f"{avg_lm:.2f}" if np.isfinite(avg_lm) else "—", 
             )
             
         c5, c6 = st.columns(2)
         with c5:
             compact_metric(
-                "低炭素電源供給率",
+                "地域電源供給率",
                 f"{normal_energy['local_supply_ratio']:.0f}","%",
             )
         with c6:
@@ -2698,25 +2642,25 @@ with col_kpi:
         c3, c4 = st.columns(2)
         with c3:
             compact_metric(
-                "優先物資到達率",
+                "配送可能物資率",
                 f"{disaster_logistics['goods_delivery_pct']:.0f}","%",
             )
 
         with c4:
             compact_metric(
-                "孤立地区数",
+                "配送できない地区数",
                 f"{disaster_logistics['isolated_count']}","地区",
             )
 
         c5, c6 = st.columns(2)
         with c5:
             compact_metric(
-                "最低サービス維持率",
+                "地区別最低サービス充足率の最小値",
                 f"{minimum_service:.0f}","%",
             )
         with c6:
             compact_metric(
-                "重要施設 自立継続時間",
+                "重要施設 供給電力量の時間換算",
                 f"{disaster_energy['autonomy_hours']:.1f}","h",
             )
 
@@ -2725,6 +2669,7 @@ with col_kpi:
             "重要サービス・到達性・継続性を優先評価します。"
         )
 
+        st.caption("時間換算値は連続稼働時間ではない。指標の定義を参照。")
         st.divider()
         st.markdown("#### 補助指標")
         st.caption(
@@ -2743,6 +2688,78 @@ with col_kpi:
 # ============================================================
 # 12. Details
 # ============================================================
+
+
+# Compare stored configurations under the SAME currently selected scenario.
+def evaluate_configuration(choice, hubs):
+    previous = {d: p["demand_profile"].copy() for d, p in districts.items()}
+    try:
+        for d, p in districts.items():
+            p["demand_profile"] = DEMAND_SHAPES[p["profile"]] * p["daily_energy"] + (LOGISTICS_POWER_PROFILE if d in hubs else 0)
+        energy = normal_energy_metrics(choice)
+        logistics = normal_logistics_metrics(hubs)
+        emergency = disaster_energy_metrics(choice, hubs)
+        delivery = disaster_logistics_metrics(hubs, choice)
+        cost = sum(TECHNOLOGIES[t]["cost"] for t in choice.values()) + len(hubs) * LOGISTICS_HUB_COST
+        return {
+            "使用予算 [pt]": cost,
+            "予算内": "はい" if cost <= TOTAL_BUDGET else "いいえ",
+            "平常時 配送率 [%]": round(logistics["coverage_pct"], 1),
+            "平常時 配送物資の平均片道距離": round(logistics["avg_delivery_distance"], 2) if np.isfinite(logistics["avg_delivery_distance"]) else None,
+            "平常時 未配送地区": ", ".join(logistics["unserved_districts"]) or "なし",
+            "平常時 電力需要 [kWh/日]": round(float(energy["total_demand"].sum()), 1),
+            "平常時 系統購入 [kWh/日]": round(float(energy["actual_grid"].sum()), 1),
+            "平常時 電力CO₂ [kg/日]": round(energy["actual_co2"], 1),
+            "平常時 地域電源による削減 [kg/日]": round(energy["co2_reduction"], 1),
+            "災害時 重要施設電力充足率 [%]": round(emergency["critical_supply_pct"], 1),
+            "災害時 地区充足率の最小値 [%]": round(min(emergency["district_service_pct"].values()), 1),
+            "災害時 配送率 [%]": round(delivery["goods_delivery_pct"], 1),
+            "災害時 未配送地区": ", ".join(delivery["unserved_districts"]) or "なし",
+        }
+    finally:
+        for d in districts:
+            districts[d]["demand_profile"] = previous[d]
+
+with st.expander("配置案A・Bの比較と記録", expanded=False):
+    st.caption("配置だけを一時保持し、両案を現在の同じ被害条件で再計算。再読込・翌週への保存は保証されないため、配置一覧を記録してください。")
+    columns = st.columns(3)
+    for index, label in enumerate(["A", "B"]):
+        if columns[index].button(f"現在の配置を案{label}に保持"):
+            st.session_state[f"plan_{label}"] = {"energy": dict(energy_choice), "hubs": list(logistics_hubs)}
+    if columns[2].button("比較案をクリア"):
+        for label in ["A", "B"]:
+            st.session_state.pop(f"plan_{label}", None)
+    plans = {label: st.session_state[f"plan_{label}"] for label in ["A", "B"] if f"plan_{label}" in st.session_state}
+    if plans:
+        records = {label: evaluate_configuration(plan["energy"], plan["hubs"]) for label, plan in plans.items()}
+        st.caption(f"災害時の共通条件：{disaster_preset}")
+        st.dataframe(pd.DataFrame(records), use_container_width=True)
+        if len(records) == 2:
+            differences = {k: round(records["B"][k] - records["A"][k], 2)
+                           for k in records["A"] if isinstance(records["A"][k], (int, float)) and isinstance(records["B"][k], (int, float))}
+            st.dataframe(pd.DataFrame({"B − A": differences}), use_container_width=True)
+        for label, plan in plans.items():
+            locations = "、".join(f"{d}:{t}" for d,t in plan["energy"].items() if t != "なし") or "なし"
+            st.write(f"案{label}　物流：{', '.join(plan['hubs']) or 'なし'}　電源：{locations}")
+
+with st.expander("指標の定義・地区別の結果"):
+    st.markdown("""
+- 平均片道距離は配送できた物資量で重み付けした平均。未配送地区を含まない。距離は仮想の距離単位。
+- CO₂は電力利用の計算範囲。配送車両の排出や設備製造は含まない。地域電源の削減量は、同じ物流需要も含む全需要を系統で賄う場合との差。
+- 電源は容量・発電量・費用の異なる設備案。地域電源の原単位は供給電力量へ適用する講義用の係数。
+- 災害時は地区の最低サービス需要を優先し、残りを物流設備へ供給。地域間の電力融通は扱わない。
+- 物流設備の一日電力充足率70%以上を稼働可能とする簡略判定。連続稼働の保証ではない。配送順は近い地区からの固定ルール。
+- 時間換算値は最低サービスへの供給電力量を平均最低サービス負荷で除した値。実際の連続供給時間ではない。
+- 被害条件を切り替えても、災害時需要の倍率は共通。配置の変更は災害発生前の設備計画として比較。
+""")
+    current_logistics = disaster_logistics if mode == "災害時" else normal_logistics
+    rows = []
+    for d in districts:
+        a = current_logistics["assignment"][d]
+        rows.append({"地区": d, "物流担当": a["hub"] or "なし", "配送": "可" if a["served"] else "不可",
+                     "理由": a["reason"], "災害時 系統接続": "あり" if disaster_energy["district_ops"][d]["connected"] else "なし",
+                     "災害時 最低サービス充足率 [%]": round(disaster_energy["district_service_pct"][d],1)})
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 with st.expander("8地区の条件と配置制約を見る"):
     rows = []
@@ -2800,7 +2817,7 @@ with st.expander("モデルの基本ルールを見る"):
 - **物流レイヤー**：濃青で都市外・地域物流拠点間の幹線輸送、緑で実際に担当する地区へのラストワンマイル配送を表示する。
 - **災害時の地区基礎需要**：地区の用途に応じて需要が変化する。住宅・商業・学校等では低下する一方、病院地区は低下せず、避難所地区では増加する。
 - **物流設備需要**：物流拠点の冷蔵・情報通信・荷役等の需要は災害時も低下しない。
-- **最低サービス需要**：実際に発生する災害時需要とは別に、地区ごとに最低限維持したいサービス率を設定してレジリエンスKPIを評価する。
+- **最低サービス需要**：実際に発生する災害時需要とは別に、地区基礎需要に最低サービス率を適用し、物流設備需要は別に全量を要求する。
 - **災害時**：一部道路・外部アクセスに加えて一部配電線も断線する。電力レイヤーでは系統から切り離される地区、物流レイヤーでは物資到達が困難になる地区をそれぞれ確認する。
 - **予算制約**：電源タイプ・物流拠点ごとの講義用コストを合計し、100 points以内とする。
         """
@@ -2820,7 +2837,7 @@ if mode == "平常時":
 else:
     isolated = disaster_logistics["isolated_districts"]
     isolated_text = (
-        "　孤立地区：" + ", ".join(isolated)
+        "　未配送地区：" + ", ".join(isolated)
         if isolated else ""
     )
 
